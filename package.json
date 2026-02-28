@@ -1,0 +1,23 @@
+{
+  "name": "cureclaw",
+  "version": "0.1.0",
+  "description": "Personal AI assistant powered by Cursor CLI with Pi-Mono event-driven patterns",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "cureclaw": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
