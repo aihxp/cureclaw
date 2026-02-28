@@ -13,6 +13,7 @@ interface ParsedArgs extends CursorAgentConfig {
   oneShot?: string;
   newSession?: boolean;
   telegram?: boolean;
+  whatsapp?: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -24,6 +25,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     streamPartialOutput: true,
     newSession: false,
     telegram: false,
+    whatsapp: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -55,6 +57,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--telegram":
         config.telegram = true;
         break;
+      case "--whatsapp":
+        config.whatsapp = true;
+        break;
       case "--help":
       case "-h":
         printUsage();
@@ -66,12 +71,13 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.3 — Cursor CLI agent with session persistence
+  console.log(`CureClaw v0.4 — Cursor CLI agent with session persistence
 
 Usage:
   cureclaw [options]              Interactive mode
   cureclaw -p "prompt"            One-shot mode
   cureclaw --telegram             Telegram bot mode
+  cureclaw --whatsapp             WhatsApp mode (Baileys)
 
 Options:
   --model <model>       Model to use (e.g., sonnet-4, gpt-5)
@@ -81,6 +87,7 @@ Options:
   --no-stream           Disable partial output streaming
   --new                 Start a fresh session (clear saved session for cwd)
   --telegram            Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
+  --whatsapp            Start as a WhatsApp bot (uses Baileys, QR auth)
   -p, --prompt <text>   Run a single prompt and exit
   -h, --help            Show this help
 
@@ -89,12 +96,15 @@ Environment:
   CURECLAW_DATA_DIR       Directory for SQLite database (~/.cureclaw)
   TELEGRAM_BOT_TOKEN      Telegram bot token (required for --telegram)
   TELEGRAM_ALLOWED_USERS  Comma-separated Telegram user IDs (optional)
-  CURECLAW_WORKSPACE      Working directory for Telegram agents (~/.cureclaw/workspace)
+  CURECLAW_WORKSPACE      Working directory for channel agents (~/.cureclaw/workspace)
+  WHATSAPP_ALLOWED_JIDS   Comma-separated WhatsApp JIDs (optional)
+  WHATSAPP_TRIGGER        Trigger word for group messages (e.g., @CureClaw)
+  WHATSAPP_BOT_NAME       Name prefix for outgoing messages (optional)
 `);
 }
 
 async function main(): Promise<void> {
-  const { oneShot, newSession, telegram, ...config } = parseArgs(
+  const { oneShot, newSession, telegram, whatsapp, ...config } = parseArgs(
     process.argv.slice(2),
   );
 
@@ -135,6 +145,42 @@ async function main(): Promise<void> {
       token,
       allowedUsers,
       workspace,
+      cursorConfig: { ...config, cwd: workspace },
+    });
+
+    process.once("SIGINT", () => channel.stop());
+    process.once("SIGTERM", () => channel.stop());
+
+    await channel.start();
+  } else if (whatsapp) {
+    const workspace =
+      process.env.CURECLAW_WORKSPACE ??
+      path.join(os.homedir(), ".cureclaw", "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+
+    const authDir = path.join(os.homedir(), ".cureclaw", "whatsapp-auth");
+    fs.mkdirSync(authDir, { recursive: true });
+
+    const allowedJidsEnv = process.env.WHATSAPP_ALLOWED_JIDS;
+    const allowedJids = allowedJidsEnv
+      ? new Set(
+          allowedJidsEnv
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+        )
+      : undefined;
+
+    const triggerWord = process.env.WHATSAPP_TRIGGER || undefined;
+    const botName = process.env.WHATSAPP_BOT_NAME || undefined;
+
+    const { WhatsAppChannel } = await import("./channels/whatsapp.js");
+    const channel = new WhatsAppChannel({
+      authDir,
+      workspace,
+      allowedJids,
+      triggerWord,
+      botName,
       cursorConfig: { ...config, cwd: workspace },
     });
 

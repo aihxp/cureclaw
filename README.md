@@ -57,12 +57,13 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.3 — Cursor CLI agent with session persistence
+CureClaw v0.4 — Cursor CLI agent with session persistence
 
 Usage:
   cureclaw [options]              Interactive mode
   cureclaw -p "prompt"            One-shot mode
   cureclaw --telegram             Telegram bot mode
+  cureclaw --whatsapp             WhatsApp mode (Baileys)
 
 Options:
   --model <model>       Model to use (e.g., sonnet-4, gpt-5)
@@ -72,6 +73,7 @@ Options:
   --no-stream           Disable partial output streaming
   --new                 Start a fresh session (clear saved session for cwd)
   --telegram            Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
+  --whatsapp            Start as a WhatsApp bot (uses Baileys, QR auth)
   -p, --prompt <text>   Run a single prompt and exit
   -h, --help            Show this help
 ```
@@ -121,21 +123,48 @@ Each Telegram chat gets its own Agent with independent session continuity. Bot c
 - `/new` — Clear session, start fresh
 - `/status` — Show current session info
 
+### WhatsApp Bot
+
+Run CureClaw as a WhatsApp bot using Baileys (WhatsApp Web protocol):
+
+```bash
+# First run — prints QR code to scan with WhatsApp
+cureclaw --whatsapp
+
+# Restrict to specific JIDs
+WHATSAPP_ALLOWED_JIDS=123456789@s.whatsapp.net cureclaw --whatsapp
+
+# Group trigger word — only respond in groups when trigger is present
+WHATSAPP_TRIGGER=@CureClaw cureclaw --whatsapp
+
+# Custom bot name prefix on outgoing messages
+WHATSAPP_BOT_NAME=CureClaw cureclaw --whatsapp
+```
+
+- First run prints a QR code — scan it with WhatsApp to authenticate
+- Auth is persisted at `~/.cureclaw/whatsapp-auth/` so subsequent runs auto-connect
+- Each JID gets its own Agent with independent session continuity (keyed by `wa:<jid>`)
+- DMs always get a response; group messages require the trigger word (if set)
+- Outgoing message queue buffers during disconnects and flushes on reconnect
+
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CURSOR_PATH` | `cursor` | Path to the Cursor CLI binary |
 | `CURECLAW_DATA_DIR` | `~/.cureclaw` | Directory for SQLite database |
+| `CURECLAW_WORKSPACE` | `~/.cureclaw/workspace` | Working directory for channel agents |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token (required for `--telegram`) |
 | `TELEGRAM_ALLOWED_USERS` | allow all | Comma-separated Telegram user IDs |
-| `CURECLAW_WORKSPACE` | `~/.cureclaw/workspace` | Working directory for Telegram agents |
+| `WHATSAPP_ALLOWED_JIDS` | allow all | Comma-separated WhatsApp JIDs |
+| `WHATSAPP_TRIGGER` | — | Trigger word for group messages (e.g., `@CureClaw`) |
+| `WHATSAPP_BOT_NAME` | — | Name prefix for outgoing messages |
 
 ## Architecture
 
 ```
 src/
-├── index.ts               Entry point, CLI/Telegram/one-shot dispatch, DB init
+├── index.ts               Entry point, CLI/Telegram/WhatsApp/one-shot dispatch, DB init
 ├── cli.ts                 Interactive readline CLI with ANSI rendering + slash commands
 ├── agent.ts               High-level Agent class with DB persistence + sessionKey
 ├── agent-loop.ts          Cursor event → AgentEvent translation layer
@@ -145,14 +174,15 @@ src/
 ├── types.ts               All type definitions
 └── channels/
     ├── channel.ts         Minimal Channel interface (start/stop)
-    └── telegram.ts        Telegram bot (grammY, one Agent per chat)
+    ├── telegram.ts        Telegram bot (grammY, one Agent per chat)
+    └── whatsapp.ts        WhatsApp bot (Baileys, QR auth, one Agent per JID)
 ```
 
 ### Layer Diagram
 
 ```
 ┌─────────────────────────────────────────────┐
-│  CLI / Your Application                     │
+│  CLI / Telegram / WhatsApp / Your App       │
 │  Subscribes to AgentEvents, renders output  │
 ├─────────────────────────────────────────────┤
 │  Agent                                      │
@@ -433,17 +463,21 @@ CureClaw extracts the tool name by finding the first key ending in `ToolCall` an
 
 ### `package.json`
 
-Two runtime dependencies — persistence and Telegram:
+Five runtime dependencies — persistence, Telegram, and WhatsApp:
 
 ```json
 {
   "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.8.0",
-    "grammy": "^1.35.0"
+    "grammy": "^1.35.0",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.10.0",
+    "@types/qrcode-terminal": "^0.12.2",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
@@ -471,6 +505,7 @@ ES2022 target with NodeNext module resolution for native ES module support:
 npm run build    # Compile TypeScript → dist/
 npm run start    # Run compiled output
 npm run dev      # Run directly with tsx (no build step)
+npm test         # Run tests
 ```
 
 ## Design Decisions
@@ -487,6 +522,9 @@ Session persistence requires a database. better-sqlite3 is synchronous (no async
 **Why grammY for Telegram?**
 TypeScript-first, modern, lightweight, zero native dependencies. Simpler and lighter than telegraf.
 
+**Why Baileys for WhatsApp?**
+The most maintained open-source WhatsApp Web library for Node.js. Provides full WhatsApp Web protocol support without requiring the official Business API, making it ideal for personal assistant use.
+
 **Why one session per working directory / chat?**
 Simplest model that works — CLI sessions keyed by cwd, Telegram sessions keyed by chat ID. Named sessions and multi-session-per-key can be added later without breaking the schema.
 
@@ -498,7 +536,7 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] Session continuity (store session IDs, use `--resume` for multi-turn)
 - [x] SQLite state persistence
 - [x] Telegram channel
-- [ ] WhatsApp channel
+- [x] WhatsApp channel
 - [ ] Steering and follow-up queues (Pi's full loop pattern)
 - [ ] Container-based agent isolation
 - [ ] Multi-agent orchestration

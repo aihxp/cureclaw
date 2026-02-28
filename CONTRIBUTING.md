@@ -37,8 +37,13 @@ src/
 ├── cursor-client.ts   Cursor subprocess management
 ├── agent-loop.ts      Event translation logic
 ├── agent.ts           Agent class
+├── db.ts              SQLite persistence (better-sqlite3)
 ├── cli.ts             Terminal UI
-└── index.ts           Entry point
+├── index.ts           Entry point
+└── channels/
+    ├── channel.ts     Channel interface (start/stop)
+    ├── telegram.ts    Telegram bot (grammY)
+    └── whatsapp.ts    WhatsApp bot (Baileys)
 ```
 
 ## Adding a New AgentEvent Type
@@ -57,12 +62,13 @@ src/
 
 ## Adding a New Channel
 
-Channels are not yet implemented. When adding one:
+Channels live in `src/channels/`. See `telegram.ts` and `whatsapp.ts` for reference:
 
 1. Create `src/channels/<name>.ts`
-2. Implement a `connect()` + `onMessage()` + `sendMessage()` interface
-3. Wire it into the Agent's subscribe/prompt cycle
-4. Keep channels independent of each other
+2. Implement the `Channel` interface from `channel.ts` (`start()` / `stop()`)
+3. Create one `Agent` per conversation (keyed by `<prefix>:<id>`, e.g., `tg:123`, `wa:jid`)
+4. Wire it into the entry point dispatch in `src/index.ts`
+5. Keep channels independent of each other
 
 ## Code Style
 

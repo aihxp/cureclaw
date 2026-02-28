@@ -69,6 +69,20 @@ export class Agent {
       }
     }
 
+    const result = await this.runStream(text, runConfig);
+
+    // If the resumed session has corrupted history, clear it and retry fresh
+    if (result.corruptSession && runConfig.sessionId) {
+      this.newSession();
+      const freshConfig = { ...this.config, sessionId: undefined };
+      await this.runStream(text, freshConfig);
+    }
+  }
+
+  private async runStream(
+    text: string,
+    runConfig: CursorAgentConfig,
+  ): Promise<{ corruptSession: boolean }> {
     this.abortController = new AbortController();
     this._state.isStreaming = true;
     this._state.error = null;
@@ -77,6 +91,7 @@ export class Agent {
     this._state.pendingToolCalls.clear();
 
     const startTime = Date.now();
+    let corruptSession = false;
 
     try {
       const stream = agentLoop(
@@ -86,6 +101,16 @@ export class Agent {
       );
 
       for await (const event of stream) {
+        // Detect corrupted session history before emitting
+        if (
+          event.type === "error" &&
+          runConfig.sessionId &&
+          isCorruptSessionError(event.message)
+        ) {
+          corruptSession = true;
+          break;
+        }
+
         this.updateState(event);
         this.emit(event);
 
@@ -97,12 +122,18 @@ export class Agent {
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : String(err);
-      this._state.error = message;
-      this.emit({ type: "error", message });
+      if (runConfig.sessionId && isCorruptSessionError(message)) {
+        corruptSession = true;
+      } else {
+        this._state.error = message;
+        this.emit({ type: "error", message });
+      }
     } finally {
       this._state.isStreaming = false;
       this.abortController = undefined;
     }
+
+    return { corruptSession };
   }
 
   /** Clear the stored session for current cwd, forcing a fresh start. */
@@ -181,4 +212,13 @@ export class Agent {
       listener(event);
     }
   }
+}
+
+/** Detect API errors caused by corrupted conversation history (orphaned tool_result blocks). */
+function isCorruptSessionError(message: string): boolean {
+  return (
+    message.includes("tool_use_id") &&
+    message.includes("tool_result") &&
+    message.includes("tool_use")
+  );
 }
