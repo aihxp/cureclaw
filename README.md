@@ -2,7 +2,7 @@
 
 Personal AI assistant powered by Cursor CLI with an event-driven agent loop.
 
-CureClaw wraps Cursor's agent CLI as a subprocess and translates its output into a structured event stream, giving you full programmatic control over the agent lifecycle. The event system is inspired by [Pi-Mono](https://github.com/nicholasgriffintn/pi-mono)'s `agentLoop()` pattern.
+CureClaw wraps Cursor's agent CLI as a subprocess and translates its output into a structured event stream, giving you full programmatic control over the agent lifecycle. The event system is inspired by [Pi-Mono](https://github.com/badlogic/pi-mono)'s `agentLoop()` pattern.
 
 ## Quick Start
 
