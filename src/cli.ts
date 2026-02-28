@@ -8,6 +8,7 @@ import { handleMcpCommand } from "./mcp/commands.js";
 import { handlePluginCommand } from "./plugin/commands.js";
 import { handleSchedulerCommand, handlePipelineCommand } from "./scheduler/commands.js";
 import { handleSkillCommand } from "./skills/commands.js";
+import { handleWorkstationCommand, testWorkstationConnectivity } from "./workstation-commands.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
 // ANSI helpers
@@ -42,7 +43,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.7") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.8") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -51,7 +52,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.7") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.8") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -83,13 +84,33 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
 
     // Handle slash commands
     if (trimmed.startsWith("/")) {
-      await handleCommand(trimmed, agent, cwd, workspace);
+      await handleCommand(trimmed, agent, cwd, workspace, config);
       rl.prompt();
       return;
     }
 
+    // @workstation prefix: run prompt on a specific workstation
+    let targetWorkstation: string | undefined;
+    let promptText = trimmed;
+    if (trimmed.startsWith("@")) {
+      const spaceIdx = trimmed.indexOf(" ");
+      if (spaceIdx > 1) {
+        targetWorkstation = trimmed.slice(1, spaceIdx);
+        promptText = trimmed.slice(spaceIdx + 1).trim();
+      }
+    }
+
     try {
-      await agent.prompt(trimmed);
+      if (targetWorkstation) {
+        const wsAgent = new Agent(
+          { ...config, workstation: targetWorkstation },
+          { useDb: true },
+        );
+        wsAgent.subscribe(renderEvent);
+        await wsAgent.prompt(promptText);
+      } else {
+        await agent.prompt(promptText);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(red(`Error: ${msg}`));
@@ -114,10 +135,27 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   });
 }
 
-async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: string): Promise<void> {
+async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: string, config?: CursorAgentConfig): Promise<void> {
   const ctx = { channelType: "cli", channelId: "cli" };
 
-  // 0. Pipeline command
+  // 0a. Workstation commands
+  const wsResult = handleWorkstationCommand(cmd);
+  if (wsResult) {
+    console.log(wsResult.text);
+    // If it was a status test, run the async connectivity check
+    if (cmd.startsWith("/workstation status ")) {
+      const name = cmd.slice(20).trim();
+      const check = await testWorkstationConnectivity(name);
+      if (check.ok) {
+        console.log(green(`Connected. ${check.output}`));
+      } else {
+        console.log(red(`Failed: ${check.output}`));
+      }
+    }
+    return;
+  }
+
+  // 0b. Pipeline command
   if (cmd.startsWith("/pipeline")) {
     const result = handlePipelineCommand(cmd, ctx);
     if (result?.pipeline) {
@@ -223,11 +261,12 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log("  /new           Clear session, start fresh");
       console.log("  /sessions      List all saved sessions");
       console.log("  /history       Show recent prompts for this directory");
-      console.log('  /schedule      Schedule a job: /schedule "prompt" <schedule> [--cloud] [--reflect]');
+      console.log('  /schedule      Schedule a job: /schedule "prompt" <schedule> [--cloud] [--reflect] [--workstation <name>]');
       console.log("  /jobs          List all scheduled jobs");
       console.log("  /cancel        Cancel a job: /cancel <id-prefix>");
       console.log('  /pipeline      Run multi-step pipeline: /pipeline "step1" [--reflect] "step2"');
       console.log("  /cloud         Cloud agent commands (launch, status, stop, list, conversation, models)");
+      console.log("  /workstation   Workstation commands (list, add, remove, default, status)");
       console.log("  /skill create  Create a new skill: /skill create <name>");
       console.log("  /skills        List discovered skills");
       console.log("  /mcp           MCP server commands (list, add, remove)");
@@ -236,6 +275,7 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log("  /quit          Exit CureClaw");
       console.log();
       console.log(dim("Tip: Type while agent is streaming to queue follow-up prompts."));
+      console.log(dim("Tip: Use @name before a prompt to target a workstation (e.g., @dev explain this)."));
       console.log();
       break;
     }

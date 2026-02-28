@@ -5,6 +5,7 @@ import type {
   CursorAgentConfig,
   CursorStreamEvent,
   CursorToolCallPayload,
+  Workstation,
 } from "./types.js";
 
 /**
@@ -15,6 +16,7 @@ export function agentLoop(
   prompt: string,
   config: CursorAgentConfig,
   signal?: AbortSignal,
+  workstation?: Workstation,
 ): EventStream<AgentEvent, AgentEvent> {
   const stream = new EventStream<AgentEvent, AgentEvent>(
     (e) => e.type === "agent_end" || e.type === "error",
@@ -22,7 +24,7 @@ export function agentLoop(
   );
 
   // Run async pipeline without blocking
-  runPipeline(prompt, config, stream, signal).catch((err) => {
+  runPipeline(prompt, config, stream, signal, workstation).catch((err) => {
     if (!stream.isDone) {
       const event: AgentEvent = {
         type: "error",
@@ -41,8 +43,9 @@ async function runPipeline(
   config: CursorAgentConfig,
   stream: EventStream<AgentEvent, AgentEvent>,
   signal?: AbortSignal,
+  workstation?: Workstation,
 ): Promise<void> {
-  const cursor = spawnCursor(prompt, config, signal);
+  const cursor = spawnCursor(prompt, config, signal, workstation);
 
   let turnStarted = false;
   let messageStarted = false;

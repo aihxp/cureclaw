@@ -54,12 +54,20 @@ function handleSchedule(args: string, ctx: CommandContext): CommandResult {
   let cloud = false;
   let reflect = false;
   let repository: string | undefined;
+  let workstation: string | undefined;
 
   // Extract --repo flag
   const repoMatch = scheduleStr.match(/--repo\s+(\S+)/);
   if (repoMatch) {
     repository = repoMatch[1];
     scheduleStr = scheduleStr.replace(/--repo\s+\S+/, "").trim();
+  }
+
+  // Extract --workstation flag
+  const wsMatch = scheduleStr.match(/--workstation\s+(\S+)/);
+  if (wsMatch) {
+    workstation = wsMatch[1];
+    scheduleStr = scheduleStr.replace(/--workstation\s+\S+/, "").trim();
   }
 
   if (scheduleStr.includes("--reflect")) {
@@ -102,13 +110,14 @@ function handleSchedule(args: string, ctx: CommandContext): CommandResult {
     cloud,
     repository,
     reflect,
+    workstation,
     enabled: true,
     createdAt: now.toISOString(),
     nextRunAt,
   });
 
   return {
-    text: `Job ${job.id} created.\nSchedule: ${formatSchedule(job.schedule)}\nNext run: ${formatDate(job.nextRunAt)}\nDelivery: ${formatDelivery(job.delivery)}${cloud ? "\nMode: cloud" : ""}${reflect ? "\nReflect: on" : ""}${repository ? `\nRepo: ${repository}` : ""}`,
+    text: `Job ${job.id} created.\nSchedule: ${formatSchedule(job.schedule)}\nNext run: ${formatDate(job.nextRunAt)}\nDelivery: ${formatDelivery(job.delivery)}${cloud ? "\nMode: cloud" : ""}${reflect ? "\nReflect: on" : ""}${repository ? `\nRepo: ${repository}` : ""}${workstation ? `\nWorkstation: ${workstation}` : ""}`,
   };
 }
 

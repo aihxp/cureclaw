@@ -14,6 +14,7 @@ import { handleMcpCommand } from "../mcp/commands.js";
 import { handleSchedulerCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import { handleSkillCommand } from "../skills/commands.js";
+import { handleWorkstationCommand } from "../workstation-commands.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
 
@@ -178,7 +179,8 @@ export class WhatsAppChannel implements Channel {
     });
   }
 
-  private async handleMessage(jid: string, text: string): Promise<void> {
+  private async handleMessage(jid: string, text_: string): Promise<void> {
+    let text = text_;
     // Intercept commands
     if (text.startsWith("/")) {
       const waCtx = { channelType: "whatsapp", channelId: jid };
@@ -207,9 +209,25 @@ export class WhatsAppChannel implements Channel {
         await this.sendMessage(jid, mcpResult.text);
         return;
       }
+
+      const wsResult = handleWorkstationCommand(text);
+      if (wsResult) {
+        await this.sendMessage(jid, wsResult.text);
+        return;
+      }
     }
 
-    const agent = this.getOrCreateAgent(jid);
+    // Parse @workstation prefix
+    let targetWorkstation: string | undefined;
+    if (text.startsWith("@") && !text.startsWith("/")) {
+      const spaceIdx = text.indexOf(" ");
+      if (spaceIdx > 1) {
+        targetWorkstation = text.slice(1, spaceIdx);
+        text = text.slice(spaceIdx + 1).trim();
+      }
+    }
+
+    const agent = this.getOrCreateAgent(jid, targetWorkstation);
 
     if (agent.state.isStreaming) {
       agent.queueFollowUp(text);
@@ -254,14 +272,15 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
-  private getOrCreateAgent(jid: string): Agent {
-    let agent = this.agents.get(jid);
+  private getOrCreateAgent(jid: string, workstation?: string): Agent {
+    const key = workstation ? `${jid}:${workstation}` : jid;
+    let agent = this.agents.get(key);
     if (!agent) {
       agent = new Agent(
-        { ...this.config.cursorConfig },
+        { ...this.config.cursorConfig, workstation },
         { useDb: true, sessionKey: `wa:${jid}` },
       );
-      this.agents.set(jid, agent);
+      this.agents.set(key, agent);
     }
     return agent;
   }

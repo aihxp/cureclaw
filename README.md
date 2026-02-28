@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.7 — Cursor CLI agent with Cloud API, skills, MCP, and plugins
+CureClaw v0.8 — Cursor CLI agent with workstations, Cloud API, skills, MCP, and plugins
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -66,17 +66,18 @@ Usage:
   cureclaw --whatsapp             WhatsApp mode (Baileys)
 
 Options:
-  --model <model>       Model to use (e.g., sonnet-4, gpt-5)
-  --yolo, --force       Auto-approve all tool calls
-  --cloud               Run Cursor agent in cloud mode
-  --cwd <dir>           Working directory for cursor agent
-  --cursor-path <path>  Path to cursor CLI binary
-  --no-stream           Disable partial output streaming
-  --new                 Start a fresh session (clear saved session for cwd)
-  --telegram            Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
-  --whatsapp            Start as a WhatsApp bot (uses Baileys, QR auth)
-  -p, --prompt <text>   Run a single prompt and exit
-  -h, --help            Show this help
+  --model <model>           Model to use (e.g., sonnet-4, gpt-5)
+  --yolo, --force           Auto-approve all tool calls
+  --cloud                   Run Cursor agent in cloud mode
+  --workstation <name>      Target a registered workstation for remote execution
+  --cwd <dir>               Working directory for cursor agent
+  --cursor-path <path>      Path to cursor CLI binary
+  --no-stream               Disable partial output streaming
+  --new                     Start a fresh session (clear saved session for cwd)
+  --telegram                Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
+  --whatsapp                Start as a WhatsApp bot (uses Baileys, QR auth)
+  -p, --prompt <text>       Run a single prompt and exit
+  -h, --help                Show this help
 ```
 
 ### Interactive Commands
@@ -90,6 +91,8 @@ Options:
 | `/jobs` | List all scheduled jobs |
 | `/cancel <id-prefix>` | Remove a scheduled job |
 | `/pipeline "step1" "step2"` | Run multi-step pipeline (`--reflect` per step) |
+| `/workstation list\|add\|remove\|default\|status` | Manage remote workstations |
+| `@name <prompt>` | Run prompt on a specific workstation |
 | `/cloud <subcommand>` | Cloud agent commands (launch, status, stop, list, conversation, models) |
 | `/skill create <name>` | Scaffold a new skill |
 | `/skills` | List discovered skills |
@@ -156,6 +159,38 @@ WHATSAPP_BOT_NAME=CureClaw cureclaw --whatsapp
 - Each JID gets its own Agent with independent session continuity (keyed by `wa:<jid>`)
 - DMs always get a response; group messages require the trigger word (if set)
 - Outgoing message queue buffers during disconnects and flushes on reconnect
+
+### Workstations
+
+Run prompts on remote dev servers, VMs, or workstations via SSH:
+
+```bash
+# Register a workstation
+/workstation add dev user@192.168.1.100 /home/user/project
+
+# Set it as the default
+/workstation default dev
+
+# Run a prompt on a specific workstation
+@dev explain this project
+
+# Test SSH connectivity
+/workstation status dev
+
+# Schedule a job on a workstation
+/schedule "check health" every 1h --workstation dev
+
+# List all workstations
+/workstation list
+
+# Remove a workstation
+/workstation remove dev
+
+# Override default with local execution
+@local explain this project
+```
+
+Workstations use SSH with `BatchMode=yes` (no interactive auth — requires key-based SSH). The remote machine must have Cursor CLI installed. NDJSON output streams back over SSH unchanged, so all existing features (session resume, reflection, pipelines) work transparently on remote workstations.
 
 ### Cloud Mode
 
@@ -338,8 +373,10 @@ src/
 ├── cli.ts                 Interactive readline CLI with ANSI rendering + slash commands
 ├── agent.ts               High-level Agent class with DB persistence + sessionKey
 ├── agent-loop.ts          Cursor event → AgentEvent translation layer
-├── cursor-client.ts       Subprocess wrapper for `cursor agent` (supports --resume, --cloud)
-├── db.ts                  SQLite schema, init, session/config/history/jobs accessors
+├── cursor-client.ts       Subprocess wrapper for `cursor agent` (local or SSH, --resume, --cloud)
+├── workstation.ts         Name validation, resolveWorkstation()
+├── workstation-commands.ts  /workstation add|remove|list|default|status
+├── db.ts                  SQLite schema, init, session/config/history/jobs/workstations accessors
 ├── event-stream.ts        Generic async iterable event stream
 ├── steering.ts            SteeringQueue — FIFO follow-up prompt buffer
 ├── reflection.ts          Reflection prompt template + pass/fail detection
@@ -390,9 +427,10 @@ src/
 │  AgentEvent          │  config, jobs        │
 ├──────────────────────┴──────────────────────┤
 │  Cursor Client                              │
-│  Spawns subprocess, --resume, --cloud       │
+│  Spawns subprocess (local or SSH)           │
+│  --resume, --cloud, workstation routing     │
 ├─────────────────────────────────────────────┤
-│  Cursor CLI (external binary)               │
+│  Cursor CLI (local or remote via SSH)       │
 │  cursor agent --print --output-format ...   │
 └─────────────────────────────────────────────┘
 ```
@@ -748,14 +786,22 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] **Reflection loop** — optional post-execution verification pass ("review your output for errors") before delivering results
 - [x] **Prompt pipelines** — chain prompts as steps: "do X → then Y → then verify Z" executed as a single unit
 
-### v0.8 — Event-Driven Autonomy
+### v0.8 — Multi-Workstation Support
+- [x] **Workstation registry** — register remote dev servers/VMs with SSH connection details
+- [x] **SSH remote execution** — `spawn("ssh", ...)` instead of `spawn("cursor", ...)`, NDJSON streaming unchanged
+- [x] **`@name` prefix** — target a specific workstation per-prompt from any channel
+- [x] **`--workstation` flag** — set default workstation for all prompts in a session
+- [x] **Scheduler integration** — `--workstation <name>` on scheduled jobs
+- [x] **Per-workstation sessions** — session keys prefixed with `ws:<name>:` for isolation
+
+### v0.9 — Event-Driven Autonomy
 - [ ] **Webhook triggers** — HTTP endpoint that accepts external signals (GitHub, CI/CD, monitoring) and spawns agent jobs
 - [ ] **File watchers** — trigger agent when workspace files change (new logs, build failures, git events)
 - [ ] **Conditional chains** — "when job A finishes with status X, run job B" (job dependency graph)
 - [ ] **Inactivity triggers** — "if no commit in N hours, run code review" (pattern-based scheduling)
 - [ ] **Continuous context injection** — auto-inject recent git diff, failing tests, open issues before each prompt
 
-### v0.9 — Multi-Agent Orchestration
+### v0.10 — Multi-Agent Orchestration
 - [ ] **Planner agent** — decomposes high-level goals into subtask tree
 - [ ] **Worker agents** — execute subtasks in parallel using existing Agent class
 - [ ] **Inter-agent messaging** — shared DB queue for agent-to-agent communication

@@ -15,6 +15,7 @@ interface ParsedArgs extends CursorAgentConfig {
   newSession?: boolean;
   telegram?: boolean;
   whatsapp?: boolean;
+  workstationFlag?: string;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -64,6 +65,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--cloud":
         config.cloud = true;
         break;
+      case "--workstation":
+        config.workstationFlag = argv[++i];
+        break;
       case "--help":
       case "-h":
         printUsage();
@@ -75,7 +79,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.7 — Cursor CLI agent with Cloud API, skills, MCP, and plugin support
+  console.log(`CureClaw v0.8 — Cursor CLI agent with workstations, Cloud API, skills, MCP, and plugin support
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -84,20 +88,29 @@ Usage:
   cureclaw --whatsapp             WhatsApp mode (Baileys)
 
 Options:
-  --model <model>       Model to use (e.g., sonnet-4, gpt-5)
-  --yolo, --force       Auto-approve all tool calls
-  --cloud               Run Cursor agent in cloud mode
-  --cwd <dir>           Working directory for cursor agent
-  --cursor-path <path>  Path to cursor CLI binary
-  --no-stream           Disable partial output streaming
-  --new                 Start a fresh session (clear saved session for cwd)
-  --telegram            Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
-  --whatsapp            Start as a WhatsApp bot (uses Baileys, QR auth)
-  -p, --prompt <text>   Run a single prompt and exit
-  -h, --help            Show this help
+  --model <model>           Model to use (e.g., sonnet-4, gpt-5)
+  --yolo, --force           Auto-approve all tool calls
+  --cloud                   Run Cursor agent in cloud mode
+  --workstation <name>      Target a registered workstation for remote execution
+  --cwd <dir>               Working directory for cursor agent
+  --cursor-path <path>      Path to cursor CLI binary
+  --no-stream               Disable partial output streaming
+  --new                     Start a fresh session (clear saved session for cwd)
+  --telegram                Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
+  --whatsapp                Start as a WhatsApp bot (uses Baileys, QR auth)
+  -p, --prompt <text>       Run a single prompt and exit
+  -h, --help                Show this help
+
+Workstation commands:
+  /workstation list                           List registered workstations
+  /workstation add <name> <user@host> <cwd>   Register a workstation
+  /workstation remove <name>                  Remove a workstation
+  /workstation default <name|local>           Set default workstation
+  /workstation status <name>                  Test SSH connectivity
+  @name <prompt>                              Run prompt on a workstation
 
 Scheduler commands (CLI, Telegram, WhatsApp):
-  /schedule "prompt" <schedule> [--cloud] [--reflect] [--repo <url>]
+  /schedule "prompt" <schedule> [--cloud] [--reflect] [--repo <url>] [--workstation <name>]
   /jobs                 List all scheduled jobs
   /cancel <id-prefix>   Remove a scheduled job
 
@@ -144,9 +157,14 @@ Environment:
 }
 
 async function main(): Promise<void> {
-  const { oneShot, newSession, telegram, whatsapp, ...config } = parseArgs(
+  const { oneShot, newSession, telegram, whatsapp, workstationFlag, ...config } = parseArgs(
     process.argv.slice(2),
   );
+
+  // Apply workstation flag to config
+  if (workstationFlag) {
+    config.workstation = workstationFlag;
+  }
 
   // Init persistence
   initDatabase();

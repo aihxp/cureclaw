@@ -160,6 +160,21 @@ export type AgentEvent =
   | { type: "pipeline_end" };
 
 // ============================================================================
+// Workstation (remote execution via SSH)
+// ============================================================================
+
+export interface Workstation {
+  name: string;
+  host: string;
+  user?: string;
+  port?: number;
+  cursorPath?: string;
+  cwd: string;
+  identityFile?: string;
+  isDefault?: boolean;
+}
+
+// ============================================================================
 // Configuration
 // ============================================================================
 
@@ -180,6 +195,8 @@ export interface CursorAgentConfig {
   cloud?: boolean;
   /** Additional CLI args */
   extraArgs?: string[];
+  /** Workstation name for remote execution via SSH */
+  workstation?: string;
 }
 
 export interface AgentState {
@@ -229,6 +246,7 @@ export interface Job {
   repository?: string;
   reflect: boolean;
   pipeline?: Pipeline;
+  workstation?: string;
   enabled: boolean;
   createdAt: string;
   nextRunAt: string | null;

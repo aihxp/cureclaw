@@ -162,6 +162,7 @@ export class Scheduler {
     const agentConfig: CursorAgentConfig = {
       ...this.config,
       cloud: job.cloud || this.config.cloud,
+      workstation: job.workstation,
     };
 
     const agent = new Agent(agentConfig, {

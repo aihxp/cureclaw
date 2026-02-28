@@ -9,7 +9,8 @@ import {
 import { SteeringQueue } from "./steering.js";
 import { buildReflectionPrompt, isReflectionPass } from "./reflection.js";
 import { interpolatePrompt } from "./pipeline.js";
-import type { AgentEvent, AgentState, CursorAgentConfig, Pipeline } from "./types.js";
+import { resolveWorkstation } from "./workstation.js";
+import type { AgentEvent, AgentState, CursorAgentConfig, Pipeline, Workstation } from "./types.js";
 
 export interface AgentOptions {
   useDb?: boolean;
@@ -42,6 +43,7 @@ export class Agent {
   private resolvedCwd: string;
   private steeringQueue = new SteeringQueue();
   private reflectConfig: boolean | string;
+  private workstation: Workstation | undefined;
 
   constructor(
     private config: CursorAgentConfig,
@@ -49,8 +51,19 @@ export class Agent {
   ) {
     if (config.model) this._state.model = config.model;
     this.useDb = opts?.useDb ?? false;
-    this.resolvedCwd = opts?.sessionKey ?? path.resolve(config.cwd || process.cwd());
     this.reflectConfig = opts?.reflect ?? false;
+
+    // Resolve workstation
+    this.workstation = config.workstation
+      ? resolveWorkstation(config.workstation)
+      : undefined;
+
+    // Session key: prefix with ws:<name>: for workstation isolation
+    let baseKey = opts?.sessionKey ?? path.resolve(config.cwd || process.cwd());
+    if (this.workstation) {
+      baseKey = `ws:${this.workstation.name}:${baseKey}`;
+    }
+    this.resolvedCwd = baseKey;
   }
 
   get state(): Readonly<AgentState> {
@@ -181,6 +194,7 @@ export class Agent {
         text,
         runConfig,
         this.abortController.signal,
+        this.workstation,
       );
 
       for await (const event of stream) {

@@ -5,6 +5,7 @@ import { handleMcpCommand } from "../mcp/commands.js";
 import { handleSchedulerCommand, handlePipelineCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import { handleSkillCommand } from "../skills/commands.js";
+import { handleWorkstationCommand } from "../workstation-commands.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
 
@@ -21,7 +22,7 @@ export class TelegramChannel implements Channel {
   readonly name = "telegram";
 
   private bot: Bot;
-  private agents = new Map<number, Agent>();
+  private agents = new Map<string, Agent>();
   private config: TelegramChannelConfig;
 
   constructor(config: TelegramChannelConfig) {
@@ -51,14 +52,14 @@ export class TelegramChannel implements Channel {
 
     this.bot.command("new", async (ctx) => {
       if (!this.isAllowed(ctx.from?.id)) return;
-      const agent = this.agents.get(ctx.chat.id);
+      const agent = this.agents.get(String(ctx.chat.id));
       if (agent) agent.newSession();
       await ctx.reply("Session cleared. Next message starts fresh.");
     });
 
     this.bot.command("status", async (ctx) => {
       if (!this.isAllowed(ctx.from?.id)) return;
-      const agent = this.agents.get(ctx.chat.id);
+      const agent = this.agents.get(String(ctx.chat.id));
       const state = agent?.state;
       const sessionId = state?.sessionId?.slice(0, 8) ?? "none";
       const model = state?.model ?? "auto";
@@ -183,6 +184,13 @@ export class TelegramChannel implements Channel {
       await ctx.reply(result?.text ?? 'Usage: /pipeline "step1" "step2"');
     });
 
+    this.bot.command("workstation", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleWorkstationCommand(`/workstation ${args}`);
+      await ctx.reply(result?.text ?? "Usage: /workstation list|add|remove|default|status");
+    });
+
     this.bot.on("message:text", async (ctx) => {
       await this.handleMessage(ctx);
     });
@@ -215,14 +223,15 @@ export class TelegramChannel implements Channel {
     return this.config.allowedUsers.has(userId);
   }
 
-  private getOrCreateAgent(chatId: number): Agent {
-    let agent = this.agents.get(chatId);
+  private getOrCreateAgent(chatId: number, workstation?: string): Agent {
+    const key = workstation ? `${chatId}:${workstation}` : String(chatId);
+    let agent = this.agents.get(key);
     if (!agent) {
       agent = new Agent(
-        { ...this.config.cursorConfig },
+        { ...this.config.cursorConfig, workstation },
         { useDb: true, sessionKey: `tg:${chatId}` },
       );
-      this.agents.set(chatId, agent);
+      this.agents.set(key, agent);
     }
     return agent;
   }
@@ -235,10 +244,20 @@ export class TelegramChannel implements Channel {
 
     const chatId = ctx.chat?.id;
     if (!chatId) return;
-    const text = ctx.message?.text?.trim();
+    let text = ctx.message?.text?.trim();
     if (!text) return;
 
-    const agent = this.getOrCreateAgent(chatId);
+    // Parse @workstation prefix
+    let targetWorkstation: string | undefined;
+    if (text.startsWith("@") && !text.startsWith("/")) {
+      const spaceIdx = text.indexOf(" ");
+      if (spaceIdx > 1) {
+        targetWorkstation = text.slice(1, spaceIdx);
+        text = text.slice(spaceIdx + 1).trim();
+      }
+    }
+
+    const agent = this.getOrCreateAgent(chatId, targetWorkstation);
 
     if (agent.state.isStreaming) {
       agent.queueFollowUp(text);

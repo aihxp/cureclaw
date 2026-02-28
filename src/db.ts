@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { Job, JobSchedule, DeliveryTarget, Pipeline } from "./types.js";
+import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation } from "./types.js";
 
 let db: Database.Database;
 
@@ -63,6 +63,18 @@ function createSchema(database: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_jobs_next_run ON jobs(enabled, next_run_at);
+
+    CREATE TABLE IF NOT EXISTS workstations (
+      name TEXT PRIMARY KEY,
+      host TEXT NOT NULL,
+      user TEXT,
+      port INTEGER DEFAULT 22,
+      cursor_path TEXT DEFAULT 'cursor',
+      cwd TEXT NOT NULL,
+      identity_file TEXT,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -75,6 +87,9 @@ function migrateSchema(database: Database.Database): void {
   }
   if (!names.has("pipeline")) {
     database.exec("ALTER TABLE jobs ADD COLUMN pipeline TEXT");
+  }
+  if (!names.has("workstation")) {
+    database.exec("ALTER TABLE jobs ADD COLUMN workstation TEXT");
   }
 }
 
@@ -214,6 +229,7 @@ interface JobRow {
   repository: string | null;
   reflect: number;
   pipeline: string | null;
+  workstation: string | null;
   enabled: number;
   created_at: string;
   next_run_at: string | null;
@@ -273,6 +289,7 @@ function jobRowToJob(row: JobRow): Job {
     repository: row.repository ?? undefined,
     reflect: row.reflect === 1,
     pipeline,
+    workstation: row.workstation ?? undefined,
     enabled: row.enabled === 1,
     createdAt: row.created_at,
     nextRunAt: row.next_run_at,
@@ -290,8 +307,8 @@ export function addJob(job: Omit<Job, "id" | "lastRunAt" | "lastStatus" | "lastE
   const now = new Date().toISOString();
 
   db.prepare(
-    `INSERT INTO jobs (id, name, prompt, schedule_kind, schedule_value, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, repository, reflect, pipeline, enabled, created_at, next_run_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO jobs (id, name, prompt, schedule_kind, schedule_value, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, repository, reflect, pipeline, workstation, enabled, created_at, next_run_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     job.name,
@@ -305,6 +322,7 @@ export function addJob(job: Omit<Job, "id" | "lastRunAt" | "lastStatus" | "lastE
     job.repository ?? null,
     job.reflect ? 1 : 0,
     job.pipeline ? JSON.stringify(job.pipeline) : null,
+    job.workstation ?? null,
     job.enabled ? 1 : 0,
     now,
     job.nextRunAt,
@@ -377,4 +395,80 @@ export function findJobByIdPrefix(prefix: string): Job | undefined {
   const rows = db.prepare("SELECT * FROM jobs WHERE id LIKE ?").all(`${prefix}%`) as JobRow[];
   if (rows.length === 1) return jobRowToJob(rows[0]);
   return undefined;
+}
+
+// --- Workstation accessors ---
+
+interface WorkstationRow {
+  name: string;
+  host: string;
+  user: string | null;
+  port: number;
+  cursor_path: string | null;
+  cwd: string;
+  identity_file: string | null;
+  is_default: number;
+  created_at: string;
+}
+
+function wsRowToWorkstation(row: WorkstationRow): Workstation {
+  return {
+    name: row.name,
+    host: row.host,
+    user: row.user ?? undefined,
+    port: row.port,
+    cursorPath: row.cursor_path ?? undefined,
+    cwd: row.cwd,
+    identityFile: row.identity_file ?? undefined,
+    isDefault: row.is_default === 1,
+  };
+}
+
+export function addWorkstation(ws: Workstation): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO workstations (name, host, user, port, cursor_path, cwd, identity_file, is_default, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    ws.name,
+    ws.host,
+    ws.user ?? null,
+    ws.port ?? 22,
+    ws.cursorPath ?? "cursor",
+    ws.cwd,
+    ws.identityFile ?? null,
+    ws.isDefault ? 1 : 0,
+    now,
+  );
+}
+
+export function getWorkstation(name: string): Workstation | undefined {
+  const row = db
+    .prepare("SELECT * FROM workstations WHERE name = ?")
+    .get(name) as WorkstationRow | undefined;
+  return row ? wsRowToWorkstation(row) : undefined;
+}
+
+export function getAllWorkstations(): Workstation[] {
+  const rows = db
+    .prepare("SELECT * FROM workstations ORDER BY name")
+    .all() as WorkstationRow[];
+  return rows.map(wsRowToWorkstation);
+}
+
+export function removeWorkstation(name: string): boolean {
+  const result = db.prepare("DELETE FROM workstations WHERE name = ?").run(name);
+  return result.changes > 0;
+}
+
+export function getDefaultWorkstation(): Workstation | undefined {
+  const row = db
+    .prepare("SELECT * FROM workstations WHERE is_default = 1")
+    .get() as WorkstationRow | undefined;
+  return row ? wsRowToWorkstation(row) : undefined;
+}
+
+export function setDefaultWorkstation(name: string): void {
+  db.prepare("UPDATE workstations SET is_default = 0").run();
+  db.prepare("UPDATE workstations SET is_default = 1 WHERE name = ?").run(name);
 }

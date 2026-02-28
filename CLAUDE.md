@@ -1,10 +1,10 @@
 # CureClaw
 
-Personal AI assistant that wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API, skills scaffolding, MCP server configuration, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows.
+Personal AI assistant that wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API, skills scaffolding, MCP server configuration, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution.
 
 ## Quick Context
 
-Single TypeScript process. Spawns `cursor agent --print --output-format stream-json --trust` as a child process, parses NDJSON stdout line-by-line, translates Cursor events into AgentEvents, and streams them to subscribers. Sessions auto-resume via `--resume <chatId>` so multi-turn conversations persist across prompts. Telegram and WhatsApp channels provide remote access with one Agent per chat. Supports `--cloud` for Cursor cloud agents (subprocess or Cloud API). Built-in scheduler runs jobs on cron/interval/one-shot schedules and delivers results to channels. Skills, MCP servers, and plugin packaging support the Cursor ecosystem. Steering queues buffer follow-up prompts while agent streams, reflection runs a verification pass after execution, and prompt pipelines chain multiple steps in a single session.
+Single TypeScript process. Spawns `cursor agent --print --output-format stream-json --trust` as a child process, parses NDJSON stdout line-by-line, translates Cursor events into AgentEvents, and streams them to subscribers. Sessions auto-resume via `--resume <chatId>` so multi-turn conversations persist across prompts. Telegram and WhatsApp channels provide remote access with one Agent per chat. Supports `--cloud` for Cursor cloud agents (subprocess or Cloud API). Built-in scheduler runs jobs on cron/interval/one-shot schedules and delivers results to channels. Skills, MCP servers, and plugin packaging support the Cursor ecosystem. Steering queues buffer follow-up prompts while agent streams, reflection runs a verification pass after execution, and prompt pipelines chain multiple steps in a single session. Workstations enable remote execution via SSH — `spawn("ssh", ...)` instead of `spawn("cursor", ...)`, with NDJSON streaming unchanged.
 
 ## Key Files
 
@@ -12,7 +12,9 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 |------|---------|
 | `src/types.ts` | All type definitions: Cursor stream types + AgentEvent types + config |
 | `src/event-stream.ts` | Generic async iterable EventStream (adapted from pi-mono) |
-| `src/cursor-client.ts` | Spawns cursor subprocess, provides async line iterator, passes `--resume` |
+| `src/cursor-client.ts` | Spawns cursor subprocess (local or SSH), provides async line iterator, passes `--resume` |
+| `src/workstation.ts` | Name validation, resolveWorkstation() for SSH target resolution |
+| `src/workstation-commands.ts` | /workstation add\|remove\|list\|default\|status command handlers |
 | `src/agent-loop.ts` | Translates CursorStreamEvent → AgentEvent, manages turn/message state |
 | `src/agent.ts` | High-level Agent class: subscribe/prompt/abort with DB persistence, steering, reflection, pipeline |
 | `src/steering.ts` | SteeringQueue — FIFO buffer for follow-up prompts while agent streams |
@@ -51,11 +53,13 @@ WhatsApp     →  Agent(jid1)  →  agentLoop()  →  spawnCursor()  →  cursor
              →  Agent(jid2)  →  ...
 Scheduler    →  Agent(job:N) →  agentLoop()  →  spawnCursor()  →  cursor agent [--cloud]
              →  CloudClient  →  Cloud API    →  api.cursor.com (for cloud+repo jobs)
+
+Workstation: spawnCursor() → spawn("ssh", [..., "cd /path && cursor agent ..."]) → remote NDJSON
                                                                      ↓
                                                               deliver(target)
 ```
 
-Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (WhatsApp) in shared SQLite DB.
+Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (WhatsApp) in shared SQLite DB. Workstation sessions prefixed with `ws:<name>:` for isolation (e.g., `ws:dev:/home/user/project`).
 
 ## Persistence
 
@@ -84,6 +88,19 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Workspace dir: `CURECLAW_WORKSPACE` or `~/.cureclaw/workspace/`
 - One Agent per JID, sessions keyed by `wa:<jid>`
 - Outgoing queue buffers messages during disconnect, flushes on reconnect
+
+### Workstations (`--workstation`)
+
+- Register remote dev servers, VMs, or workstations for SSH-based remote execution
+- `spawn("ssh", ...)` instead of `spawn("cursor", ...)` — NDJSON streaming unchanged
+- `--workstation <name>` flag targets a registered workstation for all prompts
+- `@name` prefix in prompts targets a specific workstation for that prompt only
+- Session keys prefixed with `ws:<name>:` for per-workstation session isolation
+- SSH options: `BatchMode=yes`, `StrictHostKeyChecking=accept-new`, `ConnectTimeout=10`
+- DB table: `workstations` (name, host, user, port, cursor_path, cwd, identity_file, is_default)
+- Commands: `/workstation list|add|remove|default|status`
+- Scheduler: `/schedule "prompt" every 1h --workstation dev`
+- Magic name `local` overrides default workstation (forces local execution)
 
 ### Cloud Mode (`--cloud`)
 
@@ -181,9 +198,9 @@ npm run dev -- --whatsapp                         # WhatsApp mode (QR auth)
 
 ## Roadmap Vision
 
-**v0.7 — Steering & Reflection (current):** Steering queues (auto-feed follow-up prompts on turn completion), reflection loop (post-execution verification pass), prompt pipelines (chained multi-step execution).
+**v0.8 — Multi-Workstation Support (current):** SSH-based remote execution, workstation registry (add/remove/list/default/status), `@name` prompt prefix, `--workstation` flag, per-workstation session isolation, scheduler integration.
 
-**v0.8 — Event-Driven Autonomy:** Webhook triggers (HTTP endpoint for external signals), file watchers, conditional job chains (job A → job B), inactivity triggers, continuous context injection (git diff, test results, issues auto-injected).
+**v0.9 — Event-Driven Autonomy:** Webhook triggers (HTTP endpoint for external signals), file watchers, conditional job chains (job A → job B), inactivity triggers, continuous context injection (git diff, test results, issues auto-injected).
 
 **v0.9 — Multi-Agent Orchestration:** Planner agent (goal → subtask tree), parallel worker agents, inter-agent messaging (shared DB queue), aggregator, goal decomposition.
 

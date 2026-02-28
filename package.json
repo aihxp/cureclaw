@@ -1,6 +1,6 @@
 {
   "name": "cureclaw",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Personal AI assistant powered by Cursor CLI with Pi-Mono event-driven patterns",
   "type": "module",
   "main": "dist/index.js",
@@ -11,7 +11,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
