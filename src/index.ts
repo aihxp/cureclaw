@@ -75,7 +75,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.5 — Cursor CLI agent with scheduler and cloud mode
+  console.log(`CureClaw v0.6 — Cursor CLI agent with Cloud API, skills, MCP, and plugin support
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -97,9 +97,30 @@ Options:
   -h, --help            Show this help
 
 Scheduler commands (CLI, Telegram, WhatsApp):
-  /schedule "prompt" <schedule> [--cloud]   Schedule a recurring job
-  /jobs                                     List all scheduled jobs
-  /cancel <id-prefix>                       Remove a scheduled job
+  /schedule "prompt" <schedule> [--cloud] [--repo <url>]
+  /jobs                 List all scheduled jobs
+  /cancel <id-prefix>   Remove a scheduled job
+
+Cloud commands:
+  /cloud launch "prompt" <repo-url> [--model <m>] [--pr]
+  /cloud status <id>    Get agent status
+  /cloud stop <id>      Stop a running agent
+  /cloud list           List recent agents
+  /cloud conversation <id>   Get agent transcript
+  /cloud models         List available models
+
+Skill commands:
+  /skill create <name>  Scaffold a new skill
+  /skills               List discovered skills
+
+MCP commands:
+  /mcp list             List configured MCP servers
+  /mcp add <name> <command> [args]   Add an MCP server
+  /mcp remove <name>    Remove an MCP server
+
+Plugin commands:
+  /plugin build         Build a distributable plugin
+  /plugin info          Show what would be included
 
 Schedule formats:
   every <N><s|m|h|d>    e.g., every 30m, every 4h
@@ -108,6 +129,7 @@ Schedule formats:
 
 Environment:
   CURSOR_PATH             Path to cursor CLI binary
+  CURSOR_API_KEY          API key for Cursor Cloud Agent API
   CURECLAW_DATA_DIR       Directory for SQLite database (~/.cureclaw)
   TELEGRAM_BOT_TOKEN      Telegram bot token (required for --telegram)
   TELEGRAM_ALLOWED_USERS  Comma-separated Telegram user IDs (optional)

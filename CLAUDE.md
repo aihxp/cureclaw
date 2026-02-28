@@ -1,10 +1,10 @@
 # CureClaw
 
-Personal AI assistant that wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support and cloud mode.
+Personal AI assistant that wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API, skills scaffolding, MCP server configuration, and plugin packaging.
 
 ## Quick Context
 
-Single TypeScript process. Spawns `cursor agent --print --output-format stream-json --trust` as a child process, parses NDJSON stdout line-by-line, translates Cursor events into AgentEvents, and streams them to subscribers. Sessions auto-resume via `--resume <chatId>` so multi-turn conversations persist across prompts. Telegram and WhatsApp channels provide remote access with one Agent per chat. Supports `--cloud` for Cursor cloud agents. Built-in scheduler runs jobs on cron/interval/one-shot schedules and delivers results to channels.
+Single TypeScript process. Spawns `cursor agent --print --output-format stream-json --trust` as a child process, parses NDJSON stdout line-by-line, translates Cursor events into AgentEvents, and streams them to subscribers. Sessions auto-resume via `--resume <chatId>` so multi-turn conversations persist across prompts. Telegram and WhatsApp channels provide remote access with one Agent per chat. Supports `--cloud` for Cursor cloud agents (subprocess or Cloud API). Built-in scheduler runs jobs on cron/interval/one-shot schedules and delivers results to channels. Skills, MCP servers, and plugin packaging support the Cursor ecosystem.
 
 ## Key Files
 
@@ -15,7 +15,7 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 | `src/cursor-client.ts` | Spawns cursor subprocess, provides async line iterator, passes `--resume` |
 | `src/agent-loop.ts` | Translates CursorStreamEvent → AgentEvent, manages turn/message state |
 | `src/agent.ts` | High-level Agent class: subscribe/prompt/abort with DB persistence + sessionKey |
-| `src/db.ts` | SQLite schema, init, session/config/history accessors (better-sqlite3) |
+| `src/db.ts` | SQLite schema, init, session/config/history/job accessors (better-sqlite3) |
 | `src/channels/channel.ts` | Minimal Channel interface (start/stop) |
 | `src/channels/telegram.ts` | Telegram bot: grammY, one Agent per chat, typing indicators, HTML formatting |
 | `src/channels/whatsapp.ts` | WhatsApp bot: Baileys, QR auth, one Agent per JID, reconnect + outgoing queue |
@@ -25,7 +25,18 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 | `src/scheduler/compute-next-run.ts` | Compute next run time for all schedule kinds |
 | `src/scheduler/delivery.ts` | Delivery handler registry (channels register on start) |
 | `src/scheduler/commands.ts` | Shared /schedule, /jobs, /cancel command handlers |
-| `src/scheduler/scheduler.ts` | Timer loop: check due jobs, execute, deliver, re-arm |
+| `src/scheduler/scheduler.ts` | Timer loop: check due jobs, execute (local or Cloud API), deliver, re-arm |
+| `src/cloud/types.ts` | Cloud Agent API request/response types |
+| `src/cloud/client.ts` | CloudClient class (native fetch, Basic auth) |
+| `src/cloud/commands.ts` | /cloud launch\|status\|stop\|list\|conversation\|models command handlers |
+| `src/skills/scaffold.ts` | Generate skill directory + SKILL.md template |
+| `src/skills/list.ts` | Discover skills from standard paths (.agents/skills, .cursor/skills, ~/.cursor/skills) |
+| `src/skills/commands.ts` | /skill create, /skills command handlers |
+| `src/mcp/config.ts` | Read/write .cursor/mcp.json (MCP server configuration) |
+| `src/mcp/commands.ts` | /mcp list\|add\|remove command handlers |
+| `src/plugin/manifest.ts` | Generate plugin.json manifest from workspace artifacts |
+| `src/plugin/build.ts` | Assemble distributable plugin from workspace |
+| `src/plugin/commands.ts` | /plugin build\|info command handlers |
 
 ## Architecture
 
@@ -36,6 +47,7 @@ Telegram Bot →  Agent(chat1) →  agentLoop()  →  spawnCursor()  →  cursor
 WhatsApp     →  Agent(jid1)  →  agentLoop()  →  spawnCursor()  →  cursor agent [--cloud]
              →  Agent(jid2)  →  ...
 Scheduler    →  Agent(job:N) →  agentLoop()  →  spawnCursor()  →  cursor agent [--cloud]
+             →  CloudClient  →  Cloud API    →  api.cursor.com (for cloud+repo jobs)
                                                                      ↓
                                                               deliver(target)
 ```
@@ -56,7 +68,7 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Requires `TELEGRAM_BOT_TOKEN` env var
 - Optional `TELEGRAM_ALLOWED_USERS` (comma-separated user IDs)
 - Workspace dir: `CURECLAW_WORKSPACE` or `~/.cureclaw/workspace/`
-- Bot commands: `/start`, `/new`, `/status`, `/schedule`, `/jobs`, `/cancel`
+- Bot commands: `/start`, `/new`, `/status`, `/schedule`, `/jobs`, `/cancel`, `/cloud`, `/skill`, `/skills`, `/mcp`
 - One Agent per chat, concurrent chats run independently
 
 ### WhatsApp (`--whatsapp`)
@@ -75,6 +87,33 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Pass `--cloud` flag to run Cursor agent in cloud mode (isolated VMs)
 - Can be set globally via CLI flag or per-job via `/schedule ... --cloud`
 - Cloud mode enables computer use, subagents, and plugins
+- With `CURSOR_API_KEY` set, scheduler can use the Cloud Agent API directly for jobs with `--repo`
+
+### Cloud API
+
+- Requires `CURSOR_API_KEY` env var
+- Native fetch client with Basic auth against `api.cursor.com`
+- Commands: `/cloud launch`, `/cloud status`, `/cloud stop`, `/cloud list`, `/cloud conversation`, `/cloud models`
+- Scheduler jobs with `cloud: true` + `repository` use CloudClient instead of local subprocess (falls back on error)
+
+### Skills
+
+- Scaffolding: `/skill create <name>` creates `.agents/skills/<name>/SKILL.md` + scripts/ + references/
+- Discovery: `/skills` scans workspace/.agents/skills/, workspace/.cursor/skills/, ~/.cursor/skills/
+- SKILL.md frontmatter: `---\nname: ...\ndescription: "..."\n---`
+
+### MCP Servers
+
+- Configuration stored in `.cursor/mcp.json`
+- Commands: `/mcp list`, `/mcp add <name> <command> [args]`, `/mcp remove <name>`
+- `--approve-mcps` passed alongside `--yolo` when autoApprove is set
+
+### Plugins
+
+- `/plugin build` assembles workspace artifacts into a distributable plugin
+- `/plugin info` shows what would be included (dry run)
+- Copies rules, skills, agents, and sanitized MCP config into output dir
+- Generates `plugin.json` manifest in `.cursor-plugin/`
 
 ### Scheduler
 
@@ -84,7 +123,8 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Error backoff: 30s → 1m → 5m → 15m → 60m (consecutive errors)
 - One-shot (`at`) jobs auto-disable after execution
 - Delivery: channels register handlers on start; results delivered to originating channel
-- Commands: `/schedule "prompt" <schedule> [--cloud]`, `/jobs`, `/cancel <id-prefix>`
+- Commands: `/schedule "prompt" <schedule> [--cloud] [--repo <url>]`, `/jobs`, `/cancel <id-prefix>`
+- Jobs with `--cloud --repo <url>` use Cloud API when `CURSOR_API_KEY` is available
 
 ## Event Flow
 

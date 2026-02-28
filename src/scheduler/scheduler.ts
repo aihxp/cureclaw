@@ -1,4 +1,5 @@
 import { Agent } from "../agent.js";
+import { getCloudClient } from "../cloud/client.js";
 import { getDueJobs, updateJob } from "../db.js";
 import type { AgentEvent, CursorAgentConfig, Job } from "../types.js";
 import { computeNextRun } from "./compute-next-run.js";
@@ -74,36 +75,40 @@ export class Scheduler {
   private async executeJob(job: Job): Promise<void> {
     console.log(`[scheduler] Executing job ${job.id}: "${job.name}"`);
 
-    const agentConfig: CursorAgentConfig = {
-      ...this.config,
-      cloud: job.cloud || this.config.cloud,
-    };
-
-    const agent = new Agent(agentConfig, {
-      useDb: true,
-      sessionKey: `job:${job.id}`,
-    });
-
+    const runAt = new Date().toISOString();
     let result = "";
     let error = "";
 
-    const unsubscribe = agent.subscribe((event: AgentEvent) => {
-      if (event.type === "message_end" && event.text) {
-        result += (result ? "\n\n" : "") + event.text;
-      }
-      if (event.type === "error") {
-        error = event.message;
-      }
-    });
+    // Try Cloud API path for cloud jobs with a repository
+    const cloudClient = job.cloud && job.repository ? getCloudClient() : null;
+    if (cloudClient && job.repository) {
+      try {
+        const launched = await cloudClient.launchAgent({
+          prompt: { text: job.prompt },
+          source: { repository: job.repository },
+        });
+        console.log(`[scheduler] Cloud agent ${launched.id} launched for job ${job.id}`);
 
-    const runAt = new Date().toISOString();
-
-    try {
-      await agent.prompt(job.prompt);
-    } catch (err: unknown) {
-      error = err instanceof Error ? err.message : String(err);
-    } finally {
-      unsubscribe();
+        const finished = await cloudClient.pollUntilDone(launched.id);
+        if (finished.status === "FINISHED") {
+          const conv = await cloudClient.getConversation(launched.id);
+          const assistantMsgs = conv.messages
+            .filter((m) => m.type === "assistant_message")
+            .map((m) => m.text);
+          result = assistantMsgs.join("\n\n") || finished.summary || "(no output)";
+        } else {
+          error = `Cloud agent ${finished.status}: ${finished.summary || "unknown error"}`;
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[scheduler] Cloud API failed for job ${job.id}, falling back to local: ${msg}`);
+        // Fall through to local subprocess path
+        error = "";
+        result = "";
+        await this.executeJobLocal(job, (r) => { result = r; }, (e) => { error = e; });
+      }
+    } else {
+      await this.executeJobLocal(job, (r) => { result = r; }, (e) => { error = e; });
     }
 
     const success = !error;
@@ -147,5 +152,44 @@ export class Scheduler {
     console.log(
       `[scheduler] Job ${job.id} ${success ? "completed" : "failed"}${nextRunAt ? `, next run: ${nextRunAt}` : ""}`,
     );
+  }
+
+  private async executeJobLocal(
+    job: Job,
+    onResult: (result: string) => void,
+    onError: (error: string) => void,
+  ): Promise<void> {
+    const agentConfig: CursorAgentConfig = {
+      ...this.config,
+      cloud: job.cloud || this.config.cloud,
+    };
+
+    const agent = new Agent(agentConfig, {
+      useDb: true,
+      sessionKey: `job:${job.id}`,
+    });
+
+    let result = "";
+    let error = "";
+
+    const unsubscribe = agent.subscribe((event: AgentEvent) => {
+      if (event.type === "message_end" && event.text) {
+        result += (result ? "\n\n" : "") + event.text;
+      }
+      if (event.type === "error") {
+        error = event.message;
+      }
+    });
+
+    try {
+      await agent.prompt(job.prompt);
+    } catch (err: unknown) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      unsubscribe();
+    }
+
+    onResult(result);
+    if (error) onError(error);
   }
 }

@@ -1,8 +1,13 @@
 import path from "node:path";
+import os from "node:os";
 import * as readline from "node:readline";
 import { Agent } from "./agent.js";
+import { handleCloudCommand } from "./cloud/commands.js";
 import { getSession, getAllSessions, getHistory } from "./db.js";
+import { handleMcpCommand } from "./mcp/commands.js";
+import { handlePluginCommand } from "./plugin/commands.js";
 import { handleSchedulerCommand } from "./scheduler/commands.js";
+import { handleSkillCommand } from "./skills/commands.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
 // ANSI helpers
@@ -29,11 +34,15 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const agent = new Agent(config, { useDb: true });
   const cwd = path.resolve(config.cwd || process.cwd());
 
+  const workspace =
+    process.env.CURECLAW_WORKSPACE ??
+    path.join(os.homedir(), ".cureclaw", "workspace");
+
   // Session banner
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.5") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.6") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -42,7 +51,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.5") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.6") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -67,7 +76,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
 
     // Handle slash commands
     if (trimmed.startsWith("/")) {
-      handleCommand(trimmed, agent, cwd);
+      await handleCommand(trimmed, agent, cwd, workspace);
       rl.prompt();
       return;
     }
@@ -98,17 +107,46 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   });
 }
 
-function handleCommand(cmd: string, agent: Agent, cwd: string): void {
-  // Try scheduler commands first
-  const schedResult = handleSchedulerCommand(cmd, {
-    channelType: "cli",
-    channelId: "cli",
-  });
+async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: string): Promise<void> {
+  const ctx = { channelType: "cli", channelId: "cli" };
+
+  // 1. Scheduler commands (sync)
+  const schedResult = handleSchedulerCommand(cmd, ctx);
   if (schedResult) {
     console.log(schedResult.text);
     return;
   }
 
+  // 2. Cloud commands (async)
+  const cloudResult = handleCloudCommand(cmd, ctx);
+  if (cloudResult) {
+    const result = await cloudResult;
+    console.log(result.text);
+    return;
+  }
+
+  // 3. Skill commands (sync)
+  const skillResult = handleSkillCommand(cmd, workspace);
+  if (skillResult) {
+    console.log(skillResult.text);
+    return;
+  }
+
+  // 4. MCP commands (sync)
+  const mcpResult = handleMcpCommand(cmd, workspace);
+  if (mcpResult) {
+    console.log(mcpResult.text);
+    return;
+  }
+
+  // 5. Plugin commands (sync)
+  const pluginResult = handlePluginCommand(cmd, workspace);
+  if (pluginResult) {
+    console.log(pluginResult.text);
+    return;
+  }
+
+  // 6. Built-in commands
   switch (cmd) {
     case "/new": {
       agent.newSession();
@@ -158,14 +196,19 @@ function handleCommand(cmd: string, agent: Agent, cwd: string): void {
 
     case "/help": {
       console.log(bold("Commands:\n"));
-      console.log("  /new        Clear session, start fresh");
-      console.log("  /sessions   List all saved sessions");
-      console.log("  /history    Show recent prompts for this directory");
-      console.log('  /schedule   Schedule a job: /schedule "prompt" <schedule> [--cloud]');
-      console.log("  /jobs       List all scheduled jobs");
-      console.log("  /cancel     Cancel a job: /cancel <id-prefix>");
-      console.log("  /help       Show this help");
-      console.log("  /quit       Exit CureClaw");
+      console.log("  /new           Clear session, start fresh");
+      console.log("  /sessions      List all saved sessions");
+      console.log("  /history       Show recent prompts for this directory");
+      console.log('  /schedule      Schedule a job: /schedule "prompt" <schedule> [--cloud] [--repo <url>]');
+      console.log("  /jobs          List all scheduled jobs");
+      console.log("  /cancel        Cancel a job: /cancel <id-prefix>");
+      console.log("  /cloud         Cloud agent commands (launch, status, stop, list, conversation, models)");
+      console.log("  /skill create  Create a new skill: /skill create <name>");
+      console.log("  /skills        List discovered skills");
+      console.log("  /mcp           MCP server commands (list, add, remove)");
+      console.log("  /plugin        Plugin commands (build, info)");
+      console.log("  /help          Show this help");
+      console.log("  /quit          Exit CureClaw");
       console.log();
       break;
     }

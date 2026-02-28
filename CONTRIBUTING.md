@@ -44,12 +44,27 @@ src/
 │   ├── channel.ts     Channel interface (start/stop)
 │   ├── telegram.ts    Telegram bot (grammY)
 │   └── whatsapp.ts    WhatsApp bot (Baileys)
-└── scheduler/
-    ├── parse-schedule.ts       Parse schedule strings (at/every/cron)
-    ├── compute-next-run.ts     Compute next run time for schedules
-    ├── delivery.ts             Delivery handler registry
-    ├── commands.ts             /schedule, /jobs, /cancel command handlers
-    └── scheduler.ts            Timer loop: check due jobs, execute, deliver
+├── scheduler/
+│   ├── parse-schedule.ts       Parse schedule strings (at/every/cron)
+│   ├── compute-next-run.ts     Compute next run time for schedules
+│   ├── delivery.ts             Delivery handler registry
+│   ├── commands.ts             /schedule, /jobs, /cancel command handlers
+│   └── scheduler.ts            Timer loop: check due jobs, execute, deliver
+├── cloud/
+│   ├── types.ts       Cloud Agent API types
+│   ├── client.ts      CloudClient (native fetch, Basic auth)
+│   └── commands.ts    /cloud launch|status|stop|list|conversation|models
+├── skills/
+│   ├── scaffold.ts    Generate skill dir + SKILL.md template
+│   ├── list.ts        Discover skills from standard paths
+│   └── commands.ts    /skill create, /skills
+├── mcp/
+│   ├── config.ts      Read/write .cursor/mcp.json
+│   └── commands.ts    /mcp list|add|remove
+└── plugin/
+    ├── manifest.ts    Generate plugin.json manifest
+    ├── build.ts       Assemble plugin from workspace artifacts
+    └── commands.ts    /plugin build|info
 ```
 
 ## Adding a New AgentEvent Type

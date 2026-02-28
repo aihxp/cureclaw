@@ -29,6 +29,7 @@ export function spawnCursor(
   }
   if (config.autoApprove) {
     args.push("--yolo");
+    args.push("--approve-mcps");
   }
   if (config.cloud) {
     args.push("--cloud");

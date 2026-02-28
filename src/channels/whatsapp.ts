@@ -9,8 +9,11 @@ import makeWASocket, {
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { Agent } from "../agent.js";
+import { handleCloudCommand } from "../cloud/commands.js";
+import { handleMcpCommand } from "../mcp/commands.js";
 import { handleSchedulerCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
+import { handleSkillCommand } from "../skills/commands.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
 
@@ -176,14 +179,32 @@ export class WhatsAppChannel implements Channel {
   }
 
   private async handleMessage(jid: string, text: string): Promise<void> {
-    // Intercept scheduler commands
+    // Intercept commands
     if (text.startsWith("/")) {
-      const result = handleSchedulerCommand(text, {
-        channelType: "whatsapp",
-        channelId: jid,
-      });
-      if (result) {
+      const waCtx = { channelType: "whatsapp", channelId: jid };
+
+      const schedResult = handleSchedulerCommand(text, waCtx);
+      if (schedResult) {
+        await this.sendMessage(jid, schedResult.text);
+        return;
+      }
+
+      const cloudResult = handleCloudCommand(text, waCtx);
+      if (cloudResult) {
+        const result = await cloudResult;
         await this.sendMessage(jid, result.text);
+        return;
+      }
+
+      const skillResult = handleSkillCommand(text, this.config.workspace);
+      if (skillResult) {
+        await this.sendMessage(jid, skillResult.text);
+        return;
+      }
+
+      const mcpResult = handleMcpCommand(text, this.config.workspace);
+      if (mcpResult) {
+        await this.sendMessage(jid, mcpResult.text);
         return;
       }
     }

@@ -37,18 +37,26 @@ export function handleSchedulerCommand(input: string, ctx: CommandContext): Comm
 }
 
 function handleSchedule(args: string, ctx: CommandContext): CommandResult {
-  // Parse: "prompt" <schedule> [--cloud]
+  // Parse: "prompt" <schedule> [--cloud] [--repo <url>]
   // The prompt is in quotes, schedule follows
   const match = args.match(/^"((?:[^"\\]|\\.)*)"\s+(.+)$/);
   if (!match) {
     return {
-      text: 'Usage: /schedule "prompt" <schedule> [--cloud]\n\nSchedule formats:\n  every <N><s|m|h|d>    e.g., every 30m, every 4h\n  at <ISO8601>          e.g., at 2026-03-01T09:00:00Z\n  cron <5-field>        e.g., cron 0 9 * * 1-5',
+      text: 'Usage: /schedule "prompt" <schedule> [--cloud] [--repo <url>]\n\nSchedule formats:\n  every <N><s|m|h|d>    e.g., every 30m, every 4h\n  at <ISO8601>          e.g., at 2026-03-01T09:00:00Z\n  cron <5-field>        e.g., cron 0 9 * * 1-5',
     };
   }
 
   const prompt = match[1].replace(/\\"/g, '"');
   let scheduleStr = match[2].trim();
   let cloud = false;
+  let repository: string | undefined;
+
+  // Extract --repo flag
+  const repoMatch = scheduleStr.match(/--repo\s+(\S+)/);
+  if (repoMatch) {
+    repository = repoMatch[1];
+    scheduleStr = scheduleStr.replace(/--repo\s+\S+/, "").trim();
+  }
 
   if (scheduleStr.endsWith("--cloud")) {
     cloud = true;
@@ -83,13 +91,14 @@ function handleSchedule(args: string, ctx: CommandContext): CommandResult {
     schedule,
     delivery,
     cloud,
+    repository,
     enabled: true,
     createdAt: now.toISOString(),
     nextRunAt,
   });
 
   return {
-    text: `Job ${job.id} created.\nSchedule: ${formatSchedule(job.schedule)}\nNext run: ${formatDate(job.nextRunAt)}\nDelivery: ${formatDelivery(job.delivery)}${cloud ? "\nMode: cloud" : ""}`,
+    text: `Job ${job.id} created.\nSchedule: ${formatSchedule(job.schedule)}\nNext run: ${formatDate(job.nextRunAt)}\nDelivery: ${formatDelivery(job.delivery)}${cloud ? "\nMode: cloud" : ""}${repository ? `\nRepo: ${repository}` : ""}`,
   };
 }
 

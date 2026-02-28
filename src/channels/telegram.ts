@@ -1,7 +1,10 @@
 import { Bot, type Context } from "grammy";
 import { Agent } from "../agent.js";
+import { handleCloudCommand } from "../cloud/commands.js";
+import { handleMcpCommand } from "../mcp/commands.js";
 import { handleSchedulerCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
+import { handleSkillCommand } from "../skills/commands.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
 
@@ -94,6 +97,39 @@ export class TelegramChannel implements Channel {
         channelId: String(ctx.chat?.id ?? 0),
       });
       await ctx.reply(result?.text ?? "Usage: /cancel <id-prefix>");
+    });
+
+    this.bot.command("cloud", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const cloudCtx = { channelType: "telegram", channelId: String(chatId) };
+      const resultPromise = handleCloudCommand(`/cloud ${args}`, cloudCtx);
+      if (resultPromise) {
+        const result = await resultPromise;
+        await ctx.reply(result.text);
+      }
+    });
+
+    this.bot.command("skill", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleSkillCommand(`/skill ${args}`, this.config.workspace);
+      await ctx.reply(result?.text ?? "Usage: /skill create <name>");
+    });
+
+    this.bot.command("skills", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const result = handleSkillCommand("/skills", this.config.workspace);
+      await ctx.reply(result?.text ?? "No skills found.");
+    });
+
+    this.bot.command("mcp", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleMcpCommand(`/mcp ${args}`, this.config.workspace);
+      await ctx.reply(result?.text ?? "Usage: /mcp list|add|remove");
     });
 
     this.bot.on("message:text", async (ctx) => {

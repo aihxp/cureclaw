@@ -51,6 +51,7 @@ function createSchema(database: Database.Database): void {
       delivery_channel_type TEXT,
       delivery_channel_id TEXT,
       cloud INTEGER NOT NULL DEFAULT 0,
+      repository TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       next_run_at TEXT,
@@ -197,6 +198,7 @@ interface JobRow {
   delivery_channel_type: string | null;
   delivery_channel_id: string | null;
   cloud: number;
+  repository: string | null;
   enabled: number;
   created_at: string;
   next_run_at: string | null;
@@ -244,6 +246,7 @@ function jobRowToJob(row: JobRow): Job {
     schedule: rowToSchedule(row.schedule_kind, row.schedule_value),
     delivery,
     cloud: row.cloud === 1,
+    repository: row.repository ?? undefined,
     enabled: row.enabled === 1,
     createdAt: row.created_at,
     nextRunAt: row.next_run_at,
@@ -261,8 +264,8 @@ export function addJob(job: Omit<Job, "id" | "lastRunAt" | "lastStatus" | "lastE
   const now = new Date().toISOString();
 
   db.prepare(
-    `INSERT INTO jobs (id, name, prompt, schedule_kind, schedule_value, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, enabled, created_at, next_run_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO jobs (id, name, prompt, schedule_kind, schedule_value, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, repository, enabled, created_at, next_run_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     job.name,
@@ -273,6 +276,7 @@ export function addJob(job: Omit<Job, "id" | "lastRunAt" | "lastStatus" | "lastE
     job.delivery.kind === "channel" ? job.delivery.channelType : null,
     job.delivery.kind === "channel" ? job.delivery.channelId : null,
     job.cloud ? 1 : 0,
+    job.repository ?? null,
     job.enabled ? 1 : 0,
     now,
     job.nextRunAt,

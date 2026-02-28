@@ -201,6 +201,7 @@ export interface Job {
   schedule: JobSchedule;
   delivery: DeliveryTarget;
   cloud: boolean;
+  repository?: string;
   enabled: boolean;
   createdAt: string;
   nextRunAt: string | null;

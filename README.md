@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.5 — Cursor CLI agent with scheduler and cloud mode
+CureClaw v0.6 — Cursor CLI agent with Cloud API, skills, MCP, and plugins
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -89,6 +89,11 @@ Options:
 | `/schedule "prompt" <schedule>` | Schedule a recurring job |
 | `/jobs` | List all scheduled jobs |
 | `/cancel <id-prefix>` | Remove a scheduled job |
+| `/cloud <subcommand>` | Cloud agent commands (launch, status, stop, list, conversation, models) |
+| `/skill create <name>` | Scaffold a new skill |
+| `/skills` | List discovered skills |
+| `/mcp list\|add\|remove` | Manage MCP server configuration |
+| `/plugin build\|info` | Build or inspect plugin package |
 | `/help` | Show available commands |
 | `/quit` | Exit CureClaw |
 | `Ctrl+C` | Abort current prompt (if streaming) or exit (if idle) |
@@ -166,6 +171,83 @@ cureclaw --cloud
 /schedule "run nightly tests" every 24h --cloud
 ```
 
+### Cloud API
+
+Use the Cursor Cloud Agent REST API for launching and managing cloud agents programmatically:
+
+```bash
+# Set your API key
+export CURSOR_API_KEY=your_key
+
+# Launch a cloud agent on a repo
+/cloud launch "fix the failing tests" https://github.com/user/repo --pr
+
+# Check agent status
+/cloud status <agent-id>
+
+# Get the conversation transcript
+/cloud conversation <agent-id>
+
+# List recent agents
+/cloud list
+
+# List available models
+/cloud models
+
+# Stop a running agent
+/cloud stop <agent-id>
+```
+
+Scheduler jobs with `--cloud --repo <url>` use the Cloud API directly when `CURSOR_API_KEY` is set.
+
+### Skills
+
+Scaffold and discover Cursor skills:
+
+```bash
+# Create a new skill
+/skill create deploy --description "Deploy to production"
+
+# List all discovered skills
+/skills
+```
+
+Skills are discovered from:
+1. `workspace/.agents/skills/` (workspace)
+2. `workspace/.cursor/skills/` (project)
+3. `~/.cursor/skills/` (global)
+
+### MCP Servers
+
+Configure Model Context Protocol servers for use by Cursor:
+
+```bash
+# List configured servers
+/mcp list
+
+# Add a server
+/mcp add github npx -y @modelcontextprotocol/server-github
+
+# Remove a server
+/mcp remove github
+```
+
+MCP configuration is stored in `.cursor/mcp.json`. When `--yolo` mode is active, `--approve-mcps` is also passed to auto-approve MCP server connections.
+
+### Plugin Packaging
+
+Package workspace artifacts as a distributable Cursor plugin:
+
+```bash
+# Build a plugin from the current workspace
+/plugin build --name my-plugin --version 1.0.0
+
+# Preview what would be included
+/plugin info
+```
+
+The build process copies rules, skills, agents, and MCP config (with env var sanitization) into a distributable directory with a `plugin.json` manifest.
+
 ### Job Scheduler
 
 Schedule recurring or one-shot jobs from any channel (CLI, Telegram, WhatsApp):
@@ -204,6 +286,7 @@ Error handling: failed jobs use exponential backoff (30s, 1m, 5m, 15m, 60m) befo
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CURSOR_PATH` | `cursor` | Path to the Cursor CLI binary |
+| `CURSOR_API_KEY` | — | API key for Cursor Cloud Agent API |
 | `CURECLAW_DATA_DIR` | `~/.cureclaw` | Directory for SQLite database |
 | `CURECLAW_WORKSPACE` | `~/.cureclaw/workspace` | Working directory for channel agents |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token (required for `--telegram`) |
@@ -228,12 +311,27 @@ src/
 │   ├── channel.ts         Minimal Channel interface (start/stop)
 │   ├── telegram.ts        Telegram bot (grammY, one Agent per chat)
 │   └── whatsapp.ts        WhatsApp bot (Baileys, QR auth, one Agent per JID)
-└── scheduler/
-    ├── parse-schedule.ts       Parse schedule strings (at/every/cron)
-    ├── compute-next-run.ts     Compute next run time for all schedule kinds
-    ├── delivery.ts             Delivery handler registry (channels register on start)
-    ├── commands.ts             Shared /schedule, /jobs, /cancel command handlers
-    └── scheduler.ts            Timer loop: check due jobs, execute, deliver, re-arm
+├── scheduler/
+│   ├── parse-schedule.ts       Parse schedule strings (at/every/cron)
+│   ├── compute-next-run.ts     Compute next run time for all schedule kinds
+│   ├── delivery.ts             Delivery handler registry (channels register on start)
+│   ├── commands.ts             Shared /schedule, /jobs, /cancel command handlers
+│   └── scheduler.ts            Timer loop: check due jobs, execute, deliver, re-arm
+├── cloud/
+│   ├── types.ts           Cloud API request/response types
+│   ├── client.ts          CloudClient class (native fetch, Basic auth)
+│   └── commands.ts        /cloud launch|status|stop|list|conversation|models
+├── skills/
+│   ├── scaffold.ts        Generate skill dir + SKILL.md template
+│   ├── list.ts            Discover skills from standard paths
+│   └── commands.ts        /skill create, /skills
+├── mcp/
+│   ├── config.ts          Read/write .cursor/mcp.json
+│   └── commands.ts        /mcp list|add|remove
+└── plugin/
+    ├── manifest.ts        Generate plugin.json manifest
+    ├── build.ts           Assemble plugin from workspace artifacts
+    └── commands.ts        /plugin build|info
 ```
 
 ### Layer Diagram
@@ -601,6 +699,10 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] WhatsApp channel
 - [x] Cloud mode (`--cloud` for Cursor cloud agents)
 - [x] Job scheduler (cron/interval/one-shot with delivery pipeline)
+- [x] Cloud Agent API (native REST client, scheduler integration)
+- [x] Skills (scaffolding + discovery from standard paths)
+- [x] MCP server configuration (.cursor/mcp.json management)
+- [x] Plugin packaging (build distributable from workspace artifacts)
 - [ ] Steering and follow-up queues (Pi's full loop pattern)
 - [ ] Multi-agent orchestration
 
