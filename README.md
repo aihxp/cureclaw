@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.6 — Cursor CLI agent with Cloud API, skills, MCP, and plugins
+CureClaw v0.7 — Cursor CLI agent with Cloud API, skills, MCP, and plugins
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -86,9 +86,10 @@ Options:
 | `/new` | Clear session, start fresh |
 | `/sessions` | List all saved sessions |
 | `/history` | Show recent prompts for current directory |
-| `/schedule "prompt" <schedule>` | Schedule a recurring job |
+| `/schedule "prompt" <schedule>` | Schedule a recurring job (`--reflect` for verification) |
 | `/jobs` | List all scheduled jobs |
 | `/cancel <id-prefix>` | Remove a scheduled job |
+| `/pipeline "step1" "step2"` | Run multi-step pipeline (`--reflect` per step) |
 | `/cloud <subcommand>` | Cloud agent commands (launch, status, stop, list, conversation, models) |
 | `/skill create <name>` | Scaffold a new skill |
 | `/skills` | List discovered skills |
@@ -248,6 +249,40 @@ Package workspace artifacts as a distributable Cursor plugin:
 
 The build process copies rules, skills, agents, and MCP config (with env var sanitization) into a distributable directory with a `plugin.json` manifest.
 
+### Steering & Reflection
+
+CureClaw v0.7 adds three interconnected features for multi-step workflows:
+
+**Steering Queues** — Type while the agent is streaming to queue follow-up prompts. They auto-feed after completion, all within the same Cursor session.
+
+```bash
+# In CLI: type while agent streams
+> explain the auth module
+[agent is responding...]
+> now refactor it to use JWT     # queued automatically
+> add tests for the new code     # queued automatically
+```
+
+**Reflection Loop** — Optional verification pass after execution. The agent reviews its own output and either confirms "LGTM" or fixes issues.
+
+```bash
+# Per-job reflection
+/schedule "check system health" every 1h --reflect
+
+# Programmatic
+await agent.prompt("refactor auth", { reflect: true });
+```
+
+**Prompt Pipelines** — Chain prompts as sequential steps executed in a single session.
+
+```bash
+# Multi-step pipeline
+/pipeline "write a hello world server" --reflect "add error handling" "add tests"
+
+# Template interpolation
+/pipeline "list all TODO comments" "fix the issues from: {{prev}}"
+```
+
 ### Job Scheduler
 
 Schedule recurring or one-shot jobs from any channel (CLI, Telegram, WhatsApp):
@@ -306,6 +341,9 @@ src/
 ├── cursor-client.ts       Subprocess wrapper for `cursor agent` (supports --resume, --cloud)
 ├── db.ts                  SQLite schema, init, session/config/history/jobs accessors
 ├── event-stream.ts        Generic async iterable event stream
+├── steering.ts            SteeringQueue — FIFO follow-up prompt buffer
+├── reflection.ts          Reflection prompt template + pass/fail detection
+├── pipeline.ts            Pipeline parsing + template interpolation
 ├── types.ts               All type definitions
 ├── channels/
 │   ├── channel.ts         Minimal Channel interface (start/stop)
@@ -532,6 +570,7 @@ interface AgentState {
   messageText: string;             // Accumulated message text
   pendingToolCalls: Set<string>;   // Tool call IDs in progress
   error: string | null;            // Last error message
+  queueDepth: number;              // Number of queued follow-up prompts
 }
 ```
 
@@ -703,8 +742,32 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] Skills (scaffolding + discovery from standard paths)
 - [x] MCP server configuration (.cursor/mcp.json management)
 - [x] Plugin packaging (build distributable from workspace artifacts)
-- [ ] Steering and follow-up queues (Pi's full loop pattern)
-- [ ] Multi-agent orchestration
+
+### v0.7 — Steering & Reflection
+- [x] **Steering queues** — queue follow-up prompts while agent streams; auto-feed next prompt on turn completion (Pi-Mono's full loop pattern)
+- [x] **Reflection loop** — optional post-execution verification pass ("review your output for errors") before delivering results
+- [x] **Prompt pipelines** — chain prompts as steps: "do X → then Y → then verify Z" executed as a single unit
+
+### v0.8 — Event-Driven Autonomy
+- [ ] **Webhook triggers** — HTTP endpoint that accepts external signals (GitHub, CI/CD, monitoring) and spawns agent jobs
+- [ ] **File watchers** — trigger agent when workspace files change (new logs, build failures, git events)
+- [ ] **Conditional chains** — "when job A finishes with status X, run job B" (job dependency graph)
+- [ ] **Inactivity triggers** — "if no commit in N hours, run code review" (pattern-based scheduling)
+- [ ] **Continuous context injection** — auto-inject recent git diff, failing tests, open issues before each prompt
+
+### v0.9 — Multi-Agent Orchestration
+- [ ] **Planner agent** — decomposes high-level goals into subtask tree
+- [ ] **Worker agents** — execute subtasks in parallel using existing Agent class
+- [ ] **Inter-agent messaging** — shared DB queue for agent-to-agent communication
+- [ ] **Aggregator** — collects worker results, feeds back to planner for next iteration
+- [ ] **Goal decomposition** — accept "make auth production-ready" → lint → test → fix → verify
+
+### v1.0 — General-Purpose Personal Assistant
+- [ ] **Beyond coding** — weather, calendar, appointments, email, reminders via MCP servers and tool integrations
+- [ ] **Proactive suggestions** — agent monitors context and proposes actions ("you have a meeting in 30 min, want me to prep notes?")
+- [ ] **Long-term memory** — persistent user preferences, habits, and patterns that inform autonomous decisions
+- [ ] **Approval gates** — draft-and-notify for high-stakes actions (send email, book appointment) with human-in-the-loop confirmation
+- [ ] **Cross-domain tool chaining** — combine coding tools with life tools (e.g., "deploy to staging and notify the team on Slack")
 
 ## License
 

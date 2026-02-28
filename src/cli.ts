@@ -6,7 +6,7 @@ import { handleCloudCommand } from "./cloud/commands.js";
 import { getSession, getAllSessions, getHistory } from "./db.js";
 import { handleMcpCommand } from "./mcp/commands.js";
 import { handlePluginCommand } from "./plugin/commands.js";
-import { handleSchedulerCommand } from "./scheduler/commands.js";
+import { handleSchedulerCommand, handlePipelineCommand } from "./scheduler/commands.js";
 import { handleSkillCommand } from "./skills/commands.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
@@ -42,7 +42,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.6") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.7") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -51,7 +51,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.6") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.7") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -71,6 +71,13 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     const trimmed = line.trim();
     if (!trimmed) {
       rl.prompt();
+      return;
+    }
+
+    // Queue while streaming
+    if (agent.state.isStreaming) {
+      agent.queueFollowUp(trimmed);
+      console.log(dim(`[queued] (${agent.queuedCount} pending)`));
       return;
     }
 
@@ -109,6 +116,23 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
 
 async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: string): Promise<void> {
   const ctx = { channelType: "cli", channelId: "cli" };
+
+  // 0. Pipeline command
+  if (cmd.startsWith("/pipeline")) {
+    const result = handlePipelineCommand(cmd, ctx);
+    if (result?.pipeline) {
+      try {
+        await agent.runPipeline(result.pipeline);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(red(`Error: ${msg}`));
+      }
+      console.log();
+      return;
+    }
+    if (result) console.log(result.text);
+    return;
+  }
 
   // 1. Scheduler commands (sync)
   const schedResult = handleSchedulerCommand(cmd, ctx);
@@ -199,9 +223,10 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log("  /new           Clear session, start fresh");
       console.log("  /sessions      List all saved sessions");
       console.log("  /history       Show recent prompts for this directory");
-      console.log('  /schedule      Schedule a job: /schedule "prompt" <schedule> [--cloud] [--repo <url>]');
+      console.log('  /schedule      Schedule a job: /schedule "prompt" <schedule> [--cloud] [--reflect]');
       console.log("  /jobs          List all scheduled jobs");
       console.log("  /cancel        Cancel a job: /cancel <id-prefix>");
+      console.log('  /pipeline      Run multi-step pipeline: /pipeline "step1" [--reflect] "step2"');
       console.log("  /cloud         Cloud agent commands (launch, status, stop, list, conversation, models)");
       console.log("  /skill create  Create a new skill: /skill create <name>");
       console.log("  /skills        List discovered skills");
@@ -209,6 +234,8 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log("  /plugin        Plugin commands (build, info)");
       console.log("  /help          Show this help");
       console.log("  /quit          Exit CureClaw");
+      console.log();
+      console.log(dim("Tip: Type while agent is streaming to queue follow-up prompts."));
       console.log();
       break;
     }
@@ -278,6 +305,33 @@ function renderEvent(event: AgentEvent): void {
 
     case "error":
       console.error(red(`[error] ${event.message}`));
+      break;
+
+    case "followup_start":
+      console.log(dim(`\n[followup] "${event.prompt.slice(0, 60)}"`));
+      break;
+
+    case "reflection_start":
+      console.log(dim("\n[reflecting] Reviewing output..."));
+      break;
+
+    case "reflection_end":
+      console.log(dim(`[reflection] ${event.passed ? "LGTM" : "Issues found and addressed"}`));
+      break;
+
+    case "pipeline_start":
+      console.log(dim(`\n[pipeline] ${event.stepCount} steps`));
+      break;
+
+    case "step_start":
+      console.log(dim(`\n[step ${event.stepIndex + 1}] ${event.prompt.slice(0, 60)}`));
+      break;
+
+    case "step_end":
+      break;
+
+    case "pipeline_end":
+      console.log(dim("[pipeline] Complete"));
       break;
   }
 }

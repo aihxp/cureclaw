@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { Job, JobSchedule, DeliveryTarget } from "./types.js";
+import type { Job, JobSchedule, DeliveryTarget, Pipeline } from "./types.js";
 
 let db: Database.Database;
 
@@ -66,6 +66,18 @@ function createSchema(database: Database.Database): void {
   `);
 }
 
+function migrateSchema(database: Database.Database): void {
+  const columns = database.pragma("table_info(jobs)") as Array<{ name: string }>;
+  const names = new Set(columns.map((c) => c.name));
+
+  if (!names.has("reflect")) {
+    database.exec("ALTER TABLE jobs ADD COLUMN reflect INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!names.has("pipeline")) {
+    database.exec("ALTER TABLE jobs ADD COLUMN pipeline TEXT");
+  }
+}
+
 export function initDatabase(dataDir?: string): void {
   const dir = dataDir || process.env.CURECLAW_DATA_DIR || DEFAULT_DATA_DIR;
   const dbPath = path.join(dir, "store.db");
@@ -73,6 +85,7 @@ export function initDatabase(dataDir?: string): void {
   db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   createSchema(db);
+  migrateSchema(db);
 }
 
 export function closeDatabase(): void {
@@ -199,6 +212,8 @@ interface JobRow {
   delivery_channel_id: string | null;
   cloud: number;
   repository: string | null;
+  reflect: number;
+  pipeline: string | null;
   enabled: number;
   created_at: string;
   next_run_at: string | null;
@@ -239,6 +254,15 @@ function jobRowToJob(row: JobRow): Job {
       ? { kind: "channel", channelType: row.delivery_channel_type, channelId: row.delivery_channel_id }
       : { kind: "store" };
 
+  let pipeline: Pipeline | undefined;
+  if (row.pipeline) {
+    try {
+      pipeline = JSON.parse(row.pipeline) as Pipeline;
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+
   return {
     id: row.id,
     name: row.name,
@@ -247,6 +271,8 @@ function jobRowToJob(row: JobRow): Job {
     delivery,
     cloud: row.cloud === 1,
     repository: row.repository ?? undefined,
+    reflect: row.reflect === 1,
+    pipeline,
     enabled: row.enabled === 1,
     createdAt: row.created_at,
     nextRunAt: row.next_run_at,
@@ -264,8 +290,8 @@ export function addJob(job: Omit<Job, "id" | "lastRunAt" | "lastStatus" | "lastE
   const now = new Date().toISOString();
 
   db.prepare(
-    `INSERT INTO jobs (id, name, prompt, schedule_kind, schedule_value, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, repository, enabled, created_at, next_run_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO jobs (id, name, prompt, schedule_kind, schedule_value, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, repository, reflect, pipeline, enabled, created_at, next_run_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     job.name,
@@ -277,6 +303,8 @@ export function addJob(job: Omit<Job, "id" | "lastRunAt" | "lastStatus" | "lastE
     job.delivery.kind === "channel" ? job.delivery.channelId : null,
     job.cloud ? 1 : 0,
     job.repository ?? null,
+    job.reflect ? 1 : 0,
+    job.pipeline ? JSON.stringify(job.pipeline) : null,
     job.enabled ? 1 : 0,
     now,
     job.nextRunAt,

@@ -2,7 +2,7 @@ import { Bot, type Context } from "grammy";
 import { Agent } from "../agent.js";
 import { handleCloudCommand } from "../cloud/commands.js";
 import { handleMcpCommand } from "../mcp/commands.js";
-import { handleSchedulerCommand } from "../scheduler/commands.js";
+import { handleSchedulerCommand, handlePipelineCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import { handleSkillCommand } from "../skills/commands.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
@@ -132,6 +132,57 @@ export class TelegramChannel implements Channel {
       await ctx.reply(result?.text ?? "Usage: /mcp list|add|remove");
     });
 
+    this.bot.command("pipeline", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const pipeCtx = { channelType: "telegram", channelId: String(chatId) };
+      const result = handlePipelineCommand(`/pipeline ${args}`, pipeCtx);
+      if (result?.pipeline) {
+        const agent = this.getOrCreateAgent(chatId);
+        if (agent.state.isStreaming) {
+          await ctx.reply("Still processing. Please wait.");
+          return;
+        }
+
+        this.bot.api.sendChatAction(chatId, "typing").catch(() => {});
+        const typingInterval = setInterval(() => {
+          this.bot.api.sendChatAction(chatId, "typing").catch(() => {});
+        }, 4000);
+
+        let responseText = "";
+        let errorText = "";
+        const unsubscribe = agent.subscribe((event: AgentEvent) => {
+          if (event.type === "message_end" && event.text) {
+            responseText += (responseText ? "\n\n" : "") + event.text;
+          }
+          if (event.type === "error") {
+            errorText = event.message;
+          }
+        });
+
+        try {
+          await agent.runPipeline(result.pipeline);
+        } catch (err: unknown) {
+          errorText = err instanceof Error ? err.message : String(err);
+        } finally {
+          clearInterval(typingInterval);
+          unsubscribe();
+        }
+
+        if (errorText) {
+          await this.sendResponse(chatId, `Error: ${errorText}`);
+        } else if (responseText.trim()) {
+          await this.sendResponse(chatId, responseText);
+        } else {
+          await this.sendResponse(chatId, "(No response from pipeline)");
+        }
+        return;
+      }
+      await ctx.reply(result?.text ?? 'Usage: /pipeline "step1" "step2"');
+    });
+
     this.bot.on("message:text", async (ctx) => {
       await this.handleMessage(ctx);
     });
@@ -190,7 +241,8 @@ export class TelegramChannel implements Channel {
     const agent = this.getOrCreateAgent(chatId);
 
     if (agent.state.isStreaming) {
-      await ctx.reply("Still processing your previous request. Please wait.");
+      agent.queueFollowUp(text);
+      await ctx.reply(`Queued (${agent.queuedCount} pending).`);
       return;
     }
 

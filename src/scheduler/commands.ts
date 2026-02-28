@@ -1,5 +1,6 @@
 import { addJob, getAllJobs, findJobByIdPrefix, removeJob } from "../db.js";
-import type { DeliveryTarget, Job } from "../types.js";
+import { parsePipelineArgs } from "../pipeline.js";
+import type { DeliveryTarget, Job, Pipeline } from "../types.js";
 import { parseSchedule } from "./parse-schedule.js";
 import { computeNextRun } from "./compute-next-run.js";
 
@@ -12,6 +13,8 @@ export interface CommandContext {
 
 export interface CommandResult {
   text: string;
+  /** For /pipeline command — caller executes via agent.runPipeline() */
+  pipeline?: Pipeline;
 }
 
 /**
@@ -37,18 +40,19 @@ export function handleSchedulerCommand(input: string, ctx: CommandContext): Comm
 }
 
 function handleSchedule(args: string, ctx: CommandContext): CommandResult {
-  // Parse: "prompt" <schedule> [--cloud] [--repo <url>]
+  // Parse: "prompt" <schedule> [--cloud] [--repo <url>] [--reflect]
   // The prompt is in quotes, schedule follows
   const match = args.match(/^"((?:[^"\\]|\\.)*)"\s+(.+)$/);
   if (!match) {
     return {
-      text: 'Usage: /schedule "prompt" <schedule> [--cloud] [--repo <url>]\n\nSchedule formats:\n  every <N><s|m|h|d>    e.g., every 30m, every 4h\n  at <ISO8601>          e.g., at 2026-03-01T09:00:00Z\n  cron <5-field>        e.g., cron 0 9 * * 1-5',
+      text: 'Usage: /schedule "prompt" <schedule> [--cloud] [--repo <url>] [--reflect]\n\nSchedule formats:\n  every <N><s|m|h|d>    e.g., every 30m, every 4h\n  at <ISO8601>          e.g., at 2026-03-01T09:00:00Z\n  cron <5-field>        e.g., cron 0 9 * * 1-5',
     };
   }
 
   const prompt = match[1].replace(/\\"/g, '"');
   let scheduleStr = match[2].trim();
   let cloud = false;
+  let reflect = false;
   let repository: string | undefined;
 
   // Extract --repo flag
@@ -58,9 +62,14 @@ function handleSchedule(args: string, ctx: CommandContext): CommandResult {
     scheduleStr = scheduleStr.replace(/--repo\s+\S+/, "").trim();
   }
 
-  if (scheduleStr.endsWith("--cloud")) {
+  if (scheduleStr.includes("--reflect")) {
+    reflect = true;
+    scheduleStr = scheduleStr.replace(/--reflect/, "").trim();
+  }
+
+  if (scheduleStr.includes("--cloud")) {
     cloud = true;
-    scheduleStr = scheduleStr.slice(0, -7).trim();
+    scheduleStr = scheduleStr.replace(/--cloud/, "").trim();
   }
 
   let schedule;
@@ -92,13 +101,14 @@ function handleSchedule(args: string, ctx: CommandContext): CommandResult {
     delivery,
     cloud,
     repository,
+    reflect,
     enabled: true,
     createdAt: now.toISOString(),
     nextRunAt,
   });
 
   return {
-    text: `Job ${job.id} created.\nSchedule: ${formatSchedule(job.schedule)}\nNext run: ${formatDate(job.nextRunAt)}\nDelivery: ${formatDelivery(job.delivery)}${cloud ? "\nMode: cloud" : ""}${repository ? `\nRepo: ${repository}` : ""}`,
+    text: `Job ${job.id} created.\nSchedule: ${formatSchedule(job.schedule)}\nNext run: ${formatDate(job.nextRunAt)}\nDelivery: ${formatDelivery(job.delivery)}${cloud ? "\nMode: cloud" : ""}${reflect ? "\nReflect: on" : ""}${repository ? `\nRepo: ${repository}` : ""}`,
   };
 }
 
@@ -165,4 +175,30 @@ function formatDate(iso: string | null): string {
 function formatDelivery(d: DeliveryTarget): string {
   if (d.kind === "store") return "store only";
   return `${d.channelType}:${d.channelId}`;
+}
+
+/**
+ * Handle /pipeline command.
+ * Returns { text: "", pipeline } for caller to execute via agent.runPipeline(),
+ * or { text: "Usage: ..." } on parse failure.
+ */
+export function handlePipelineCommand(input: string, _ctx: CommandContext): CommandResult | null {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("/pipeline")) return null;
+
+  const args = trimmed.slice(9).trim();
+  if (!args) {
+    return {
+      text: 'Usage: /pipeline "step 1" [--reflect] "step 2" [--reflect] ...\n\nSteps are quoted prompts executed sequentially.\n--reflect adds a verification pass after the preceding step.\nUse {{prev}} in a step to reference the previous step\'s output.',
+    };
+  }
+
+  const pipeline = parsePipelineArgs(args);
+  if (!pipeline) {
+    return {
+      text: 'Parse error. Usage: /pipeline "step 1" [--reflect] "step 2" ...',
+    };
+  }
+
+  return { text: "", pipeline };
 }

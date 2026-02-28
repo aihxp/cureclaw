@@ -146,7 +146,18 @@ export type AgentEvent =
       success: boolean;
       result: string;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  // Steering
+  | { type: "followup_start"; prompt: string }
+  | { type: "followup_end" }
+  // Reflection
+  | { type: "reflection_start" }
+  | { type: "reflection_end"; passed: boolean }
+  // Pipeline
+  | { type: "pipeline_start"; stepCount: number }
+  | { type: "step_start"; stepIndex: number; prompt: string }
+  | { type: "step_end"; stepIndex: number }
+  | { type: "pipeline_end" };
 
 // ============================================================================
 // Configuration
@@ -179,6 +190,20 @@ export interface AgentState {
   messageText: string;
   pendingToolCalls: Set<string>;
   error: string | null;
+  queueDepth: number;
+}
+
+// ============================================================================
+// Pipeline types
+// ============================================================================
+
+export interface PipelineStep {
+  prompt: string;
+  reflect?: boolean;
+}
+
+export interface Pipeline {
+  steps: PipelineStep[];
 }
 
 // ============================================================================
@@ -202,6 +227,8 @@ export interface Job {
   delivery: DeliveryTarget;
   cloud: boolean;
   repository?: string;
+  reflect: boolean;
+  pipeline?: Pipeline;
   enabled: boolean;
   createdAt: string;
   nextRunAt: string | null;

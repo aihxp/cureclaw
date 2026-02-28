@@ -1,10 +1,10 @@
 # CureClaw
 
-Personal AI assistant that wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API, skills scaffolding, MCP server configuration, and plugin packaging.
+Personal AI assistant that wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API, skills scaffolding, MCP server configuration, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows.
 
 ## Quick Context
 
-Single TypeScript process. Spawns `cursor agent --print --output-format stream-json --trust` as a child process, parses NDJSON stdout line-by-line, translates Cursor events into AgentEvents, and streams them to subscribers. Sessions auto-resume via `--resume <chatId>` so multi-turn conversations persist across prompts. Telegram and WhatsApp channels provide remote access with one Agent per chat. Supports `--cloud` for Cursor cloud agents (subprocess or Cloud API). Built-in scheduler runs jobs on cron/interval/one-shot schedules and delivers results to channels. Skills, MCP servers, and plugin packaging support the Cursor ecosystem.
+Single TypeScript process. Spawns `cursor agent --print --output-format stream-json --trust` as a child process, parses NDJSON stdout line-by-line, translates Cursor events into AgentEvents, and streams them to subscribers. Sessions auto-resume via `--resume <chatId>` so multi-turn conversations persist across prompts. Telegram and WhatsApp channels provide remote access with one Agent per chat. Supports `--cloud` for Cursor cloud agents (subprocess or Cloud API). Built-in scheduler runs jobs on cron/interval/one-shot schedules and delivers results to channels. Skills, MCP servers, and plugin packaging support the Cursor ecosystem. Steering queues buffer follow-up prompts while agent streams, reflection runs a verification pass after execution, and prompt pipelines chain multiple steps in a single session.
 
 ## Key Files
 
@@ -14,7 +14,10 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 | `src/event-stream.ts` | Generic async iterable EventStream (adapted from pi-mono) |
 | `src/cursor-client.ts` | Spawns cursor subprocess, provides async line iterator, passes `--resume` |
 | `src/agent-loop.ts` | Translates CursorStreamEvent → AgentEvent, manages turn/message state |
-| `src/agent.ts` | High-level Agent class: subscribe/prompt/abort with DB persistence + sessionKey |
+| `src/agent.ts` | High-level Agent class: subscribe/prompt/abort with DB persistence, steering, reflection, pipeline |
+| `src/steering.ts` | SteeringQueue — FIFO buffer for follow-up prompts while agent streams |
+| `src/reflection.ts` | Reflection prompt template + pass/fail detection |
+| `src/pipeline.ts` | Pipeline types, prompt parsing, template interpolation ({{prev}}, {{step.N}}) |
 | `src/db.ts` | SQLite schema, init, session/config/history/job accessors (better-sqlite3) |
 | `src/channels/channel.ts` | Minimal Channel interface (start/stop) |
 | `src/channels/telegram.ts` | Telegram bot: grammY, one Agent per chat, typing indicators, HTML formatting |
@@ -115,6 +118,31 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Copies rules, skills, agents, and sanitized MCP config into output dir
 - Generates `plugin.json` manifest in `.cursor-plugin/`
 
+### Steering Queues
+
+- Type while agent is streaming to queue follow-up prompts
+- Queued prompts auto-feed after the current prompt completes
+- All follow-ups share the same Cursor session via `--resume`
+- Channels (Telegram/WhatsApp) queue messages instead of rejecting while busy
+- `agent.queueFollowUp(text)`, `agent.queuedCount`, `agent.clearQueue()`
+
+### Reflection Loop
+
+- Optional verification pass after execution
+- Enable per-prompt: `agent.prompt(text, { reflect: true })`
+- Enable globally: `new Agent(config, { reflect: true })`
+- Enable per-job: `/schedule "prompt" every 1h --reflect`
+- Default prompt asks agent to review for errors and say "LGTM" if clean
+- Pass detection: case-insensitive match against "lgtm", "looks good to me", etc.
+
+### Prompt Pipelines
+
+- Chain multiple prompts as sequential steps in a single session
+- `/pipeline "step 1" [--reflect] "step 2" [--reflect] "step 3"`
+- `--reflect` after a quoted prompt adds a reflection pass for that step
+- Template interpolation: `{{prev}}` for previous step output, `{{step.N}}` for step N
+- Pipeline jobs: scheduled jobs can have a `pipeline` field
+
 ### Scheduler
 
 - Runs automatically in CLI, Telegram, and WhatsApp modes
@@ -130,7 +158,7 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 
 Cursor emits NDJSON on stdout → parsed in cursor-client → translated in agent-loop → pushed to EventStream → consumed by Agent → emitted to subscribers.
 
-Event types: `agent_start`, `thinking_delta`, `thinking_end`, `turn_start`, `message_start`, `message_delta`, `message_end`, `tool_start`, `tool_end`, `turn_end`, `agent_end`, `error`.
+Event types: `agent_start`, `thinking_delta`, `thinking_end`, `turn_start`, `message_start`, `message_delta`, `message_end`, `tool_start`, `tool_end`, `turn_end`, `agent_end`, `error`, `followup_start`, `followup_end`, `reflection_start`, `reflection_end`, `pipeline_start`, `step_start`, `step_end`, `pipeline_end`.
 
 ## Development
 
@@ -150,3 +178,13 @@ npm run dev -- --whatsapp                         # WhatsApp mode (QR auth)
 - No over-engineering: each file has one job
 - Tool name extraction: find key ending in `ToolCall`, strip suffix
 - Partial vs final assistant messages: `timestamp_ms` present = delta, absent = final
+
+## Roadmap Vision
+
+**v0.7 — Steering & Reflection (current):** Steering queues (auto-feed follow-up prompts on turn completion), reflection loop (post-execution verification pass), prompt pipelines (chained multi-step execution).
+
+**v0.8 — Event-Driven Autonomy:** Webhook triggers (HTTP endpoint for external signals), file watchers, conditional job chains (job A → job B), inactivity triggers, continuous context injection (git diff, test results, issues auto-injected).
+
+**v0.9 — Multi-Agent Orchestration:** Planner agent (goal → subtask tree), parallel worker agents, inter-agent messaging (shared DB queue), aggregator, goal decomposition.
+
+**v1.0 — General-Purpose Personal Assistant:** Beyond coding — weather, calendar, appointments, email, reminders via MCP. Proactive suggestions, long-term memory (user habits/preferences), approval gates for high-stakes actions, cross-domain tool chaining (deploy + notify on Slack).

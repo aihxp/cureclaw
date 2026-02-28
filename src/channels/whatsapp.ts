@@ -212,10 +212,8 @@ export class WhatsAppChannel implements Channel {
     const agent = this.getOrCreateAgent(jid);
 
     if (agent.state.isStreaming) {
-      await this.sendMessage(
-        jid,
-        "Still processing your previous request. Please wait.",
-      );
+      agent.queueFollowUp(text);
+      await this.sendMessage(jid, `Queued (${agent.queuedCount} pending).`);
       return;
     }
 

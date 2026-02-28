@@ -167,6 +167,7 @@ export class Scheduler {
     const agent = new Agent(agentConfig, {
       useDb: true,
       sessionKey: `job:${job.id}`,
+      reflect: job.reflect,
     });
 
     let result = "";
@@ -182,7 +183,11 @@ export class Scheduler {
     });
 
     try {
-      await agent.prompt(job.prompt);
+      if (job.pipeline) {
+        await agent.runPipeline(job.pipeline);
+      } else {
+        await agent.prompt(job.prompt);
+      }
     } catch (err: unknown) {
       error = err instanceof Error ? err.message : String(err);
     } finally {

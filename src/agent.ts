@@ -6,12 +6,17 @@ import {
   clearSession,
   addHistory,
 } from "./db.js";
-import type { AgentEvent, AgentState, CursorAgentConfig } from "./types.js";
+import { SteeringQueue } from "./steering.js";
+import { buildReflectionPrompt, isReflectionPass } from "./reflection.js";
+import { interpolatePrompt } from "./pipeline.js";
+import type { AgentEvent, AgentState, CursorAgentConfig, Pipeline } from "./types.js";
 
 export interface AgentOptions {
   useDb?: boolean;
   /** Override the DB session key. Defaults to resolved cwd. Telegram uses "tg:<chatId>". */
   sessionKey?: string;
+  /** Enable reflection for all prompts. Pass a string for a custom reflection prompt. */
+  reflect?: boolean | string;
 }
 
 /**
@@ -28,12 +33,15 @@ export class Agent {
     messageText: "",
     pendingToolCalls: new Set(),
     error: null,
+    queueDepth: 0,
   };
 
   private listeners = new Set<(e: AgentEvent) => void>();
   private abortController?: AbortController;
   private useDb: boolean;
   private resolvedCwd: string;
+  private steeringQueue = new SteeringQueue();
+  private reflectConfig: boolean | string;
 
   constructor(
     private config: CursorAgentConfig,
@@ -42,6 +50,7 @@ export class Agent {
     if (config.model) this._state.model = config.model;
     this.useDb = opts?.useDb ?? false;
     this.resolvedCwd = opts?.sessionKey ?? path.resolve(config.cwd || process.cwd());
+    this.reflectConfig = opts?.reflect ?? false;
   }
 
   get state(): Readonly<AgentState> {
@@ -55,7 +64,24 @@ export class Agent {
     };
   }
 
-  async prompt(text: string): Promise<void> {
+  /** Add a follow-up prompt to the steering queue. */
+  queueFollowUp(prompt: string): void {
+    this.steeringQueue.enqueue(prompt);
+    this._state.queueDepth = this.steeringQueue.length;
+  }
+
+  /** Number of queued follow-up prompts. */
+  get queuedCount(): number {
+    return this.steeringQueue.length;
+  }
+
+  /** Discard all queued follow-ups. */
+  clearQueue(): void {
+    this.steeringQueue.clear();
+    this._state.queueDepth = 0;
+  }
+
+  async prompt(text: string, opts?: { reflect?: boolean | string }): Promise<void> {
     if (this._state.isStreaming) {
       throw new Error("Agent is already processing a prompt.");
     }
@@ -77,12 +103,69 @@ export class Agent {
       const freshConfig = { ...this.config, sessionId: undefined };
       await this.runStream(text, freshConfig);
     }
+
+    // Reflection pass (on success only, single pass, no recursion)
+    const shouldReflect = opts?.reflect ?? this.reflectConfig;
+    if (shouldReflect && !result.error) {
+      await this.runReflection(shouldReflect, runConfig);
+    }
+
+    // Drain steering queue (auto-feed follow-ups)
+    await this.drainQueue(runConfig);
+  }
+
+  /** Execute a multi-step pipeline within a single session. */
+  async runPipeline(pipeline: Pipeline): Promise<void> {
+    if (this._state.isStreaming) {
+      throw new Error("Agent is already processing a prompt.");
+    }
+
+    // Auto-resume from DB if no explicit sessionId
+    const runConfig = { ...this.config };
+    if (this.useDb && !runConfig.sessionId) {
+      const saved = getSession(this.resolvedCwd);
+      if (saved) {
+        runConfig.sessionId = saved.session_id;
+      }
+    }
+
+    this.emit({ type: "pipeline_start", stepCount: pipeline.steps.length });
+
+    const stepResults = new Map<number, string>();
+    let prevResult = "";
+
+    for (let i = 0; i < pipeline.steps.length; i++) {
+      const step = pipeline.steps[i];
+      const interpolated = interpolatePrompt(step.prompt, stepResults, prevResult);
+
+      this.emit({ type: "step_start", stepIndex: i, prompt: interpolated });
+
+      await this.runStream(interpolated, {
+        ...runConfig,
+        sessionId: this._state.sessionId ?? runConfig.sessionId,
+      });
+
+      prevResult = this._state.messageText;
+      stepResults.set(i, prevResult);
+
+      if (step.reflect) {
+        await this.runReflection(true, {
+          ...runConfig,
+          sessionId: this._state.sessionId ?? runConfig.sessionId,
+        });
+      }
+
+      this.emit({ type: "step_end", stepIndex: i });
+    }
+
+    this.emit({ type: "pipeline_end" });
+    await this.drainQueue(runConfig);
   }
 
   private async runStream(
     text: string,
     runConfig: CursorAgentConfig,
-  ): Promise<{ corruptSession: boolean }> {
+  ): Promise<{ corruptSession: boolean; error: boolean }> {
     this.abortController = new AbortController();
     this._state.isStreaming = true;
     this._state.error = null;
@@ -133,7 +216,37 @@ export class Agent {
       this.abortController = undefined;
     }
 
-    return { corruptSession };
+    return { corruptSession, error: !!this._state.error };
+  }
+
+  private async runReflection(
+    reflectOpt: boolean | string,
+    runConfig: CursorAgentConfig,
+  ): Promise<void> {
+    const reflectionPrompt = buildReflectionPrompt(
+      typeof reflectOpt === "string" ? reflectOpt : undefined,
+    );
+    this.emit({ type: "reflection_start" });
+    await this.runStream(reflectionPrompt, {
+      ...runConfig,
+      sessionId: this._state.sessionId ?? runConfig.sessionId,
+    });
+    const passed = isReflectionPass(this._state.messageText);
+    this.emit({ type: "reflection_end", passed });
+  }
+
+  private async drainQueue(runConfig: CursorAgentConfig): Promise<void> {
+    let next: string | undefined;
+    while ((next = this.steeringQueue.dequeue()) !== undefined) {
+      this._state.queueDepth = this.steeringQueue.length;
+      this.emit({ type: "followup_start", prompt: next });
+      await this.runStream(next, {
+        ...runConfig,
+        sessionId: this._state.sessionId ?? runConfig.sessionId,
+      });
+      this.emit({ type: "followup_end" });
+    }
+    this._state.queueDepth = 0;
   }
 
   /** Clear the stored session for current cwd, forcing a fresh start. */

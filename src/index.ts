@@ -75,7 +75,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.6 — Cursor CLI agent with Cloud API, skills, MCP, and plugin support
+  console.log(`CureClaw v0.7 — Cursor CLI agent with Cloud API, skills, MCP, and plugin support
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -97,9 +97,12 @@ Options:
   -h, --help            Show this help
 
 Scheduler commands (CLI, Telegram, WhatsApp):
-  /schedule "prompt" <schedule> [--cloud] [--repo <url>]
+  /schedule "prompt" <schedule> [--cloud] [--reflect] [--repo <url>]
   /jobs                 List all scheduled jobs
   /cancel <id-prefix>   Remove a scheduled job
+
+Pipeline commands:
+  /pipeline "step1" [--reflect] "step2"   Multi-step prompt pipeline
 
 Cloud commands:
   /cloud launch "prompt" <repo-url> [--model <m>] [--pr]
