@@ -163,6 +163,8 @@ export interface CursorAgentConfig {
   autoApprove?: boolean;
   /** Stream partial text output (--stream-partial-output) */
   streamPartialOutput?: boolean;
+  /** Resume a specific Cursor session by chatId */
+  sessionId?: string;
   /** Additional CLI args */
   extraArgs?: string[];
 }

@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.1 — Cursor CLI agent with Pi-style event loop
+CureClaw v0.2 — Cursor CLI agent with session persistence
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -69,6 +69,7 @@ Options:
   --cwd <dir>           Working directory for cursor agent
   --cursor-path <path>  Path to cursor CLI binary
   --no-stream           Disable partial output streaming
+  --new                 Start a fresh session (clear saved session for cwd)
   -p, --prompt <text>   Run a single prompt and exit
   -h, --help            Show this help
 ```
@@ -77,25 +78,47 @@ Options:
 
 | Command | Action |
 |---------|--------|
+| `/new` | Clear session, start fresh |
+| `/sessions` | List all saved sessions |
+| `/history` | Show recent prompts for current directory |
+| `/help` | Show available commands |
 | `/quit` | Exit CureClaw |
-| `/exit` | Exit CureClaw |
 | `Ctrl+C` | Abort current prompt (if streaming) or exit (if idle) |
+
+### Session Continuity
+
+CureClaw automatically persists Cursor sessions per working directory. When you send a second prompt from the same directory, Cursor resumes with full conversation context via `--resume <chatId>`.
+
+```bash
+# First prompt starts a new session
+cureclaw -p "explain the auth module"
+
+# Second prompt resumes — Cursor remembers the conversation
+cureclaw -p "now refactor it to use JWT"
+
+# Force a fresh session
+cureclaw --new -p "start over with a clean slate"
+```
+
+Session data is stored in `~/.cureclaw/store.db` (SQLite).
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CURSOR_PATH` | `cursor` | Path to the Cursor CLI binary |
+| `CURECLAW_DATA_DIR` | `~/.cureclaw` | Directory for SQLite database |
 
 ## Architecture
 
 ```
 src/
-├── index.ts           Entry point and argument parsing
-├── cli.ts             Interactive readline CLI with ANSI rendering
-├── agent.ts           High-level Agent class (subscribe / prompt / abort)
+├── index.ts           Entry point, argument parsing, DB init
+├── cli.ts             Interactive readline CLI with ANSI rendering + slash commands
+├── agent.ts           High-level Agent class with DB persistence
 ├── agent-loop.ts      Cursor event → AgentEvent translation layer
-├── cursor-client.ts   Subprocess wrapper for `cursor agent`
+├── cursor-client.ts   Subprocess wrapper for `cursor agent` (supports --resume)
+├── db.ts              SQLite schema, init, session/config/history accessors
 ├── event-stream.ts    Generic async iterable event stream
 └── types.ts           All type definitions
 ```
@@ -108,13 +131,14 @@ src/
 │  Subscribes to AgentEvents, renders output  │
 ├─────────────────────────────────────────────┤
 │  Agent                                      │
-│  State management, subscribe/prompt/abort   │
-├─────────────────────────────────────────────┤
-│  Agent Loop                                 │
-│  Translates CursorStreamEvents → AgentEvents│
-├─────────────────────────────────────────────┤
+│  State management, DB persistence, resume   │
+├──────────────────────┬──────────────────────┤
+│  Agent Loop          │  SQLite (db.ts)      │
+│  CursorEvent →       │  sessions, history,  │
+│  AgentEvent          │  config              │
+├──────────────────────┴──────────────────────┤
 │  Cursor Client                              │
-│  Spawns subprocess, parses NDJSON stdout    │
+│  Spawns subprocess, --resume, NDJSON parse  │
 ├─────────────────────────────────────────────┤
 │  Cursor CLI (external binary)               │
 │  cursor agent --print --output-format ...   │
@@ -241,6 +265,9 @@ const config: CursorAgentConfig = {
 };
 
 const agent = new Agent(config);
+
+// With persistence (auto-resume sessions from DB)
+const agentWithDb = new Agent(config, { useDb: true });
 ```
 
 #### `agent.prompt(text: string): Promise<void>`
@@ -267,6 +294,14 @@ Cancel the current prompt. Sends SIGTERM to the Cursor process, followed by SIGK
 
 ```typescript
 agent.abort();
+```
+
+#### `agent.newSession(): void`
+
+Clear the stored session for the current working directory. The next `prompt()` call will start a fresh Cursor session.
+
+```typescript
+agent.newSession();
 ```
 
 #### `agent.state: AgentState`
@@ -373,11 +408,15 @@ CureClaw extracts the tool name by finding the first key ending in `ToolCall` an
 
 ### `package.json`
 
-Zero runtime dependencies. Only dev dependencies for TypeScript compilation:
+One runtime dependency (`better-sqlite3`) for session persistence:
 
 ```json
 {
+  "dependencies": {
+    "better-sqlite3": "^11.8.0"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
@@ -416,17 +455,20 @@ Cursor CLI handles model selection, tool execution, permission management, conte
 **Why the Pi-Mono event pattern?**
 Pi-Mono's `agentLoop()` is the cleanest event-driven agent pattern in the open-source ecosystem. Its discriminated union of events (`agent_start`, `message_delta`, `tool_start`, etc.) maps naturally to Cursor's stream-json output and provides a familiar interface for anyone building on top.
 
-**Why zero runtime dependencies?**
-Everything CureClaw needs — subprocess spawning, line parsing, readline, ANSI colors — is built into Node.js. No dependency means no supply chain risk, no version conflicts, and instant installs.
+**Why better-sqlite3?**
+Session persistence requires a database. better-sqlite3 is synchronous (no async ceremony), fast, and battle-tested. It's the only non-builtin dependency.
+
+**Why one session per working directory?**
+Simplest model that works — matches how developers think about projects. Named sessions and multi-session-per-cwd can be added later without breaking the schema.
 
 **Why one process per prompt?**
-Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exits. This is the simplest integration model. Session continuity via `--resume` is planned for a future version.
+Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exits. Session continuity is achieved via `--resume <chatId>`, which Cursor supports natively.
 
 ## Roadmap
 
-- [ ] Session continuity (store session IDs, use `--resume` for multi-turn)
+- [x] Session continuity (store session IDs, use `--resume` for multi-turn)
+- [x] SQLite state persistence
 - [ ] Messaging channels (Telegram, WhatsApp)
-- [ ] SQLite state persistence
 - [ ] Steering and follow-up queues (Pi's full loop pattern)
 - [ ] Container-based agent isolation
 - [ ] Multi-agent orchestration

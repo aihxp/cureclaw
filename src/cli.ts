@@ -1,5 +1,7 @@
+import path from "node:path";
 import * as readline from "node:readline";
 import { Agent } from "./agent.js";
+import { getSession, getAllSessions, getHistory } from "./db.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
 // ANSI helpers
@@ -10,13 +12,40 @@ const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 
-export async function startCli(config: CursorAgentConfig): Promise<void> {
-  const agent = new Agent(config);
+function formatTimeAgo(isoString: string): string {
+  const diff = Date.now() - new Date(isoString).getTime();
+  const secs = Math.floor(diff / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
-  console.log(
-    bold("CureClaw v0.1") + dim(` (cursor ${config.model ?? "auto"})`),
-  );
-  console.log(dim("Type your prompt. Ctrl+C to exit.\n"));
+export async function startCli(config: CursorAgentConfig): Promise<void> {
+  const agent = new Agent(config, { useDb: true });
+  const cwd = path.resolve(config.cwd || process.cwd());
+
+  // Session banner
+  const saved = getSession(cwd);
+  if (saved) {
+    console.log(
+      bold("CureClaw v0.2") + dim(` (cursor ${config.model ?? "auto"})`),
+    );
+    console.log(
+      dim(
+        `Resuming session ${saved.session_id.slice(0, 8)}... (${formatTimeAgo(saved.updated_at)})`,
+      ),
+    );
+  } else {
+    console.log(
+      bold("CureClaw v0.2") + dim(` (cursor ${config.model ?? "auto"})`),
+    );
+    console.log(dim("New session"));
+  }
+  console.log(dim("Type /help for commands. Ctrl+C to exit.\n"));
 
   agent.subscribe(renderEvent);
 
@@ -35,9 +64,11 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
       return;
     }
 
-    if (trimmed === "/quit" || trimmed === "/exit") {
-      rl.close();
-      process.exit(0);
+    // Handle slash commands
+    if (trimmed.startsWith("/")) {
+      handleCommand(trimmed, agent, cwd);
+      rl.prompt();
+      return;
     }
 
     try {
@@ -64,6 +95,74 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
       rl.close();
     }
   });
+}
+
+function handleCommand(cmd: string, agent: Agent, cwd: string): void {
+  switch (cmd) {
+    case "/new": {
+      agent.newSession();
+      console.log(green("Session cleared. Next prompt starts fresh."));
+      break;
+    }
+
+    case "/sessions": {
+      const sessions = getAllSessions();
+      if (sessions.length === 0) {
+        console.log(dim("No saved sessions."));
+        break;
+      }
+      console.log(bold("Saved sessions:\n"));
+      for (const s of sessions) {
+        const marker = s.cwd === cwd ? cyan(" ←") : "";
+        console.log(
+          `  ${s.session_id.slice(0, 8)}  ${dim(formatTimeAgo(s.updated_at))}  ${s.cwd}${marker}`,
+        );
+        if (s.last_prompt) {
+          console.log(dim(`    "${s.last_prompt.slice(0, 60)}"`));
+        }
+      }
+      console.log();
+      break;
+    }
+
+    case "/history": {
+      const entries = getHistory(cwd, 10);
+      if (entries.length === 0) {
+        console.log(dim("No history for this directory."));
+        break;
+      }
+      console.log(bold("Recent prompts:\n"));
+      for (const h of entries) {
+        const tokens = h.input_tokens && h.output_tokens
+          ? dim(` [${h.input_tokens}in/${h.output_tokens}out]`)
+          : "";
+        const dur = h.duration_ms ? dim(` ${h.duration_ms}ms`) : "";
+        console.log(
+          `  ${dim(formatTimeAgo(h.created_at))} ${h.prompt.slice(0, 70)}${tokens}${dur}`,
+        );
+      }
+      console.log();
+      break;
+    }
+
+    case "/help": {
+      console.log(bold("Commands:\n"));
+      console.log("  /new        Clear session, start fresh");
+      console.log("  /sessions   List all saved sessions");
+      console.log("  /history    Show recent prompts for this directory");
+      console.log("  /help       Show this help");
+      console.log("  /quit       Exit CureClaw");
+      console.log();
+      break;
+    }
+
+    case "/quit":
+    case "/exit":
+      process.exit(0);
+
+    default:
+      console.log(dim(`Unknown command: ${cmd}. Type /help for commands.`));
+  }
 }
 
 function renderEvent(event: AgentEvent): void {

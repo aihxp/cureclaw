@@ -1,6 +1,6 @@
 {
   "name": "cureclaw",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Personal AI assistant powered by Cursor CLI with Pi-Mono event-driven patterns",
   "type": "module",
   "main": "dist/index.js",
@@ -12,7 +12,11 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"
   },
+  "dependencies": {
+    "better-sqlite3": "^11.8.0"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

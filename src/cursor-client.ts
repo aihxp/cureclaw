@@ -30,6 +30,9 @@ export function spawnCursor(
   if (config.autoApprove) {
     args.push("--yolo");
   }
+  if (config.sessionId) {
+    args.push("--resume", config.sessionId);
+  }
   if (config.extraArgs) {
     args.push(...config.extraArgs);
   }

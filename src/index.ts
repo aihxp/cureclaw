@@ -1,19 +1,26 @@
 #!/usr/bin/env node
 
+import { initDatabase, closeDatabase, clearSession } from "./db.js";
 import { startCli } from "./cli.js";
 import type { CursorAgentConfig } from "./types.js";
+import path from "node:path";
 
 const DEFAULT_CURSOR_PATH = process.env.CURSOR_PATH ?? "cursor";
 
-function parseArgs(argv: string[]): CursorAgentConfig & { oneShot?: string } {
-  const config: CursorAgentConfig = {
+interface ParsedArgs extends CursorAgentConfig {
+  oneShot?: string;
+  newSession?: boolean;
+}
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const config: ParsedArgs = {
     cursorPath: DEFAULT_CURSOR_PATH,
     model: undefined,
     cwd: process.cwd(),
     autoApprove: false,
     streamPartialOutput: true,
+    newSession: false,
   };
-  let oneShot: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -33,10 +40,13 @@ function parseArgs(argv: string[]): CursorAgentConfig & { oneShot?: string } {
         break;
       case "--prompt":
       case "-p":
-        oneShot = argv[++i];
+        config.oneShot = argv[++i];
         break;
       case "--no-stream":
         config.streamPartialOutput = false;
+        break;
+      case "--new":
+        config.newSession = true;
         break;
       case "--help":
       case "-h":
@@ -45,11 +55,11 @@ function parseArgs(argv: string[]): CursorAgentConfig & { oneShot?: string } {
     }
   }
 
-  return { ...config, oneShot };
+  return config;
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.1 — Cursor CLI agent with Pi-style event loop
+  console.log(`CureClaw v0.2 — Cursor CLI agent with session persistence
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -61,18 +71,27 @@ Options:
   --cwd <dir>           Working directory for cursor agent
   --cursor-path <path>  Path to cursor CLI binary
   --no-stream           Disable partial output streaming
+  --new                 Start a fresh session (clear saved session for cwd)
   -p, --prompt <text>   Run a single prompt and exit
   -h, --help            Show this help
 `);
 }
 
 async function main(): Promise<void> {
-  const { oneShot, ...config } = parseArgs(process.argv.slice(2));
+  const { oneShot, newSession, ...config } = parseArgs(process.argv.slice(2));
+
+  // Init persistence
+  initDatabase();
+
+  // Clear session if --new flag is set
+  if (newSession) {
+    clearSession(path.resolve(config.cwd || process.cwd()));
+  }
 
   if (oneShot) {
     // One-shot mode: run a single prompt and exit
     const { Agent } = await import("./agent.js");
-    const agent = new Agent(config);
+    const agent = new Agent(config, { useDb: true });
     agent.subscribe((e) => {
       if (e.type === "message_delta") {
         process.stdout.write(e.text);
@@ -85,6 +104,7 @@ async function main(): Promise<void> {
       }
     });
     await agent.prompt(oneShot);
+    closeDatabase();
   } else {
     await startCli(config);
   }
@@ -92,5 +112,6 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   console.error(`Fatal: ${err.message}`);
+  closeDatabase();
   process.exit(1);
 });
