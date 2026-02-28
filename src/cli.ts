@@ -32,7 +32,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.2") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.3") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -41,7 +41,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.2") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.3") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
