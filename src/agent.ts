@@ -10,6 +10,8 @@ import type { AgentEvent, AgentState, CursorAgentConfig } from "./types.js";
 
 export interface AgentOptions {
   useDb?: boolean;
+  /** Override the DB session key. Defaults to resolved cwd. Telegram uses "tg:<chatId>". */
+  sessionKey?: string;
 }
 
 /**
@@ -39,7 +41,7 @@ export class Agent {
   ) {
     if (config.model) this._state.model = config.model;
     this.useDb = opts?.useDb ?? false;
-    this.resolvedCwd = path.resolve(config.cwd || process.cwd());
+    this.resolvedCwd = opts?.sessionKey ?? path.resolve(config.cwd || process.cwd());
   }
 
   get state(): Readonly<AgentState> {

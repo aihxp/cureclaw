@@ -57,11 +57,12 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.2 — Cursor CLI agent with session persistence
+CureClaw v0.3 — Cursor CLI agent with session persistence
 
 Usage:
   cureclaw [options]              Interactive mode
   cureclaw -p "prompt"            One-shot mode
+  cureclaw --telegram             Telegram bot mode
 
 Options:
   --model <model>       Model to use (e.g., sonnet-4, gpt-5)
@@ -70,6 +71,7 @@ Options:
   --cursor-path <path>  Path to cursor CLI binary
   --no-stream           Disable partial output streaming
   --new                 Start a fresh session (clear saved session for cwd)
+  --telegram            Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
   -p, --prompt <text>   Run a single prompt and exit
   -h, --help            Show this help
 ```
@@ -102,25 +104,48 @@ cureclaw --new -p "start over with a clean slate"
 
 Session data is stored in `~/.cureclaw/store.db` (SQLite).
 
+### Telegram Bot
+
+Run CureClaw as a Telegram bot for remote access from any device:
+
+```bash
+# Start the bot (get a token from @BotFather)
+TELEGRAM_BOT_TOKEN=your_token cureclaw --telegram
+
+# Restrict access to specific users
+TELEGRAM_BOT_TOKEN=your_token TELEGRAM_ALLOWED_USERS=12345,67890 cureclaw --telegram
+```
+
+Each Telegram chat gets its own Agent with independent session continuity. Bot commands:
+- `/start` — Welcome message
+- `/new` — Clear session, start fresh
+- `/status` — Show current session info
+
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CURSOR_PATH` | `cursor` | Path to the Cursor CLI binary |
 | `CURECLAW_DATA_DIR` | `~/.cureclaw` | Directory for SQLite database |
+| `TELEGRAM_BOT_TOKEN` | — | Telegram bot token (required for `--telegram`) |
+| `TELEGRAM_ALLOWED_USERS` | allow all | Comma-separated Telegram user IDs |
+| `CURECLAW_WORKSPACE` | `~/.cureclaw/workspace` | Working directory for Telegram agents |
 
 ## Architecture
 
 ```
 src/
-├── index.ts           Entry point, argument parsing, DB init
-├── cli.ts             Interactive readline CLI with ANSI rendering + slash commands
-├── agent.ts           High-level Agent class with DB persistence
-├── agent-loop.ts      Cursor event → AgentEvent translation layer
-├── cursor-client.ts   Subprocess wrapper for `cursor agent` (supports --resume)
-├── db.ts              SQLite schema, init, session/config/history accessors
-├── event-stream.ts    Generic async iterable event stream
-└── types.ts           All type definitions
+├── index.ts               Entry point, CLI/Telegram/one-shot dispatch, DB init
+├── cli.ts                 Interactive readline CLI with ANSI rendering + slash commands
+├── agent.ts               High-level Agent class with DB persistence + sessionKey
+├── agent-loop.ts          Cursor event → AgentEvent translation layer
+├── cursor-client.ts       Subprocess wrapper for `cursor agent` (supports --resume)
+├── db.ts                  SQLite schema, init, session/config/history accessors
+├── event-stream.ts        Generic async iterable event stream
+├── types.ts               All type definitions
+└── channels/
+    ├── channel.ts         Minimal Channel interface (start/stop)
+    └── telegram.ts        Telegram bot (grammY, one Agent per chat)
 ```
 
 ### Layer Diagram
@@ -408,12 +433,13 @@ CureClaw extracts the tool name by finding the first key ending in `ToolCall` an
 
 ### `package.json`
 
-One runtime dependency (`better-sqlite3`) for session persistence:
+Two runtime dependencies — persistence and Telegram:
 
 ```json
 {
   "dependencies": {
-    "better-sqlite3": "^11.8.0"
+    "better-sqlite3": "^11.8.0",
+    "grammy": "^1.35.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
@@ -456,10 +482,13 @@ Cursor CLI handles model selection, tool execution, permission management, conte
 Pi-Mono's `agentLoop()` is the cleanest event-driven agent pattern in the open-source ecosystem. Its discriminated union of events (`agent_start`, `message_delta`, `tool_start`, etc.) maps naturally to Cursor's stream-json output and provides a familiar interface for anyone building on top.
 
 **Why better-sqlite3?**
-Session persistence requires a database. better-sqlite3 is synchronous (no async ceremony), fast, and battle-tested. It's the only non-builtin dependency.
+Session persistence requires a database. better-sqlite3 is synchronous (no async ceremony), fast, and battle-tested.
 
-**Why one session per working directory?**
-Simplest model that works — matches how developers think about projects. Named sessions and multi-session-per-cwd can be added later without breaking the schema.
+**Why grammY for Telegram?**
+TypeScript-first, modern, lightweight, zero native dependencies. Simpler and lighter than telegraf.
+
+**Why one session per working directory / chat?**
+Simplest model that works — CLI sessions keyed by cwd, Telegram sessions keyed by chat ID. Named sessions and multi-session-per-key can be added later without breaking the schema.
 
 **Why one process per prompt?**
 Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exits. Session continuity is achieved via `--resume <chatId>`, which Cursor supports natively.
@@ -468,7 +497,8 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 
 - [x] Session continuity (store session IDs, use `--resume` for multi-turn)
 - [x] SQLite state persistence
-- [ ] Messaging channels (Telegram, WhatsApp)
+- [x] Telegram channel
+- [ ] WhatsApp channel
 - [ ] Steering and follow-up queues (Pi's full loop pattern)
 - [ ] Container-based agent isolation
 - [ ] Multi-agent orchestration
