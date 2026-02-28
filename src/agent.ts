@@ -10,6 +10,8 @@ import { SteeringQueue } from "./steering.js";
 import { buildReflectionPrompt, isReflectionPass } from "./reflection.js";
 import { interpolatePrompt } from "./pipeline.js";
 import { resolveWorkstation } from "./workstation.js";
+import type { CursorMode } from "./mode.js";
+import type { ImageAttachment } from "./images.js";
 import type { AgentEvent, AgentState, CursorAgentConfig, Pipeline, Workstation } from "./types.js";
 
 export interface AgentOptions {
@@ -29,6 +31,7 @@ export class Agent {
   private _state: AgentState = {
     sessionId: null,
     model: "auto",
+    mode: "agent",
     isStreaming: false,
     thinkingText: "",
     messageText: "",
@@ -50,6 +53,7 @@ export class Agent {
     opts?: AgentOptions,
   ) {
     if (config.model) this._state.model = config.model;
+    if (config.mode) this._state.mode = config.mode;
     this.useDb = opts?.useDb ?? false;
     this.reflectConfig = opts?.reflect ?? false;
 
@@ -94,13 +98,20 @@ export class Agent {
     this._state.queueDepth = 0;
   }
 
-  async prompt(text: string, opts?: { reflect?: boolean | string }): Promise<void> {
+  /** Switch the agent's mode (agent/plan/ask). */
+  setMode(mode: CursorMode): void {
+    this.config = { ...this.config, mode };
+    this._state.mode = mode;
+  }
+
+  async prompt(text: string, opts?: { reflect?: boolean | string; mode?: CursorMode; images?: ImageAttachment[] }): Promise<void> {
     if (this._state.isStreaming) {
       throw new Error("Agent is already processing a prompt.");
     }
 
     // Auto-resume from DB if no explicit sessionId
     const runConfig = { ...this.config };
+    if (opts?.mode) runConfig.mode = opts.mode;
     if (this.useDb && !runConfig.sessionId) {
       const saved = getSession(this.resolvedCwd);
       if (saved) {

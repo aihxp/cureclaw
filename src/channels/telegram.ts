@@ -1,7 +1,12 @@
 import { Bot, type Context } from "grammy";
 import { Agent } from "../agent.js";
+import { handleAgentCommand } from "../agents/commands.js";
 import { handleCloudCommand } from "../cloud/commands.js";
+import { handleCommandsCommand } from "../commands/commands.js";
+import { handleHooksCommand } from "../hooks/commands.js";
+import type { ImageAttachment } from "../images.js";
 import { handleMcpCommand } from "../mcp/commands.js";
+import { parseModePrefix } from "../mode.js";
 import { handleSchedulerCommand, handlePipelineCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import { handleSkillCommand } from "../skills/commands.js";
@@ -191,6 +196,99 @@ export class TelegramChannel implements Channel {
       await ctx.reply(result?.text ?? "Usage: /workstation list|add|remove|default|status");
     });
 
+    this.bot.command("mode", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const modeArg = ctx.match?.toString().trim() ?? "";
+      const agent = this.getOrCreateAgent(chatId);
+      if (!modeArg) {
+        await ctx.reply(`Current mode: ${agent.state.mode}\nUsage: /mode <agent|plan|ask>`);
+      } else {
+        const { isValidMode } = await import("../mode.js");
+        if (isValidMode(modeArg)) {
+          agent.setMode(modeArg);
+          await ctx.reply(`Mode set to: ${modeArg}`);
+        } else {
+          await ctx.reply(`Invalid mode: "${modeArg}". Valid modes: agent, plan, ask`);
+        }
+      }
+    });
+
+    this.bot.command("hooks", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleHooksCommand(`/hooks ${args}`, this.config.workspace);
+      await ctx.reply(result?.text ?? "Usage: /hooks list|add|remove");
+    });
+
+    this.bot.command("agents", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const result = handleAgentCommand("/agents", this.config.workspace);
+      await ctx.reply(result?.text ?? "No subagents found.");
+    });
+
+    this.bot.command("commands", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const result = handleCommandsCommand("/commands", this.config.workspace);
+      await ctx.reply(result?.text ?? "No commands found.");
+    });
+
+    this.bot.command("run", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleCommandsCommand(`/run ${args}`, this.config.workspace);
+      if (result?.runPrompt) {
+        const agent = this.getOrCreateAgent(chatId);
+        if (agent.state.isStreaming) {
+          await ctx.reply("Still processing. Please wait.");
+          return;
+        }
+
+        this.bot.api.sendChatAction(chatId, "typing").catch(() => {});
+        const typingInterval = setInterval(() => {
+          this.bot.api.sendChatAction(chatId, "typing").catch(() => {});
+        }, 4000);
+
+        let responseText = "";
+        let errorText = "";
+        const unsubscribe = agent.subscribe((event: AgentEvent) => {
+          if (event.type === "message_end" && event.text) {
+            responseText += (responseText ? "\n\n" : "") + event.text;
+          }
+          if (event.type === "error") {
+            errorText = event.message;
+          }
+        });
+
+        try {
+          await agent.prompt(result.runPrompt);
+        } catch (err: unknown) {
+          errorText = err instanceof Error ? err.message : String(err);
+        } finally {
+          clearInterval(typingInterval);
+          unsubscribe();
+        }
+
+        if (errorText) {
+          await this.sendResponse(chatId, `Error: ${errorText}`);
+        } else if (responseText.trim()) {
+          await this.sendResponse(chatId, responseText);
+        } else {
+          await this.sendResponse(chatId, "(No response from command)");
+        }
+        return;
+      }
+      await ctx.reply(result?.text ?? "Usage: /run <command-name>");
+    });
+
+    // Handle photo messages for image passthrough
+    this.bot.on("message:photo", async (ctx) => {
+      await this.handlePhotoMessage(ctx);
+    });
+
     this.bot.on("message:text", async (ctx) => {
       await this.handleMessage(ctx);
     });
@@ -257,6 +355,14 @@ export class TelegramChannel implements Channel {
       }
     }
 
+    // Mode prefix parsing
+    const modeOverride = parseModePrefix(text);
+    const promptOpts: { mode?: import("../mode.js").CursorMode } = {};
+    if (modeOverride) {
+      text = modeOverride.prompt;
+      promptOpts.mode = modeOverride.mode;
+    }
+
     const agent = this.getOrCreateAgent(chatId, targetWorkstation);
 
     if (agent.state.isStreaming) {
@@ -284,7 +390,80 @@ export class TelegramChannel implements Channel {
     });
 
     try {
-      await agent.prompt(text);
+      await agent.prompt(text, promptOpts);
+    } catch (err: unknown) {
+      errorText = err instanceof Error ? err.message : String(err);
+    } finally {
+      clearInterval(typingInterval);
+      unsubscribe();
+    }
+
+    if (errorText) {
+      await this.sendResponse(chatId, `Error: ${errorText}`);
+    } else if (responseText.trim()) {
+      await this.sendResponse(chatId, responseText);
+    } else {
+      await this.sendResponse(chatId, "(No response from agent)");
+    }
+  }
+
+  private async handlePhotoMessage(ctx: Context): Promise<void> {
+    if (!this.isAllowed(ctx.from?.id)) {
+      await ctx.reply("Access denied.");
+      return;
+    }
+
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    const caption = ctx.message?.caption?.trim() ?? "Describe this image.";
+
+    // Get the largest photo size
+    const photos = ctx.message?.photo;
+    if (!photos || photos.length === 0) return;
+    const largestPhoto = photos[photos.length - 1];
+
+    const agent = this.getOrCreateAgent(chatId);
+    if (agent.state.isStreaming) {
+      agent.queueFollowUp(caption);
+      await ctx.reply(`Queued (${agent.queuedCount} pending).`);
+      return;
+    }
+
+    // Download photo
+    let images: ImageAttachment[] = [];
+    try {
+      const file = await ctx.api.getFile(largestPhoto.file_id);
+      const url = `https://api.telegram.org/file/bot${this.config.token}/${file.file_path}`;
+      const response = await fetch(url);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      images = [{
+        data: buffer.toString("base64"),
+        mediaType: "image/jpeg",
+        dimensions: { width: largestPhoto.width, height: largestPhoto.height },
+      }];
+    } catch {
+      // If download fails, proceed text-only
+    }
+
+    this.bot.api.sendChatAction(chatId, "typing").catch(() => {});
+    const typingInterval = setInterval(() => {
+      this.bot.api.sendChatAction(chatId, "typing").catch(() => {});
+    }, 4000);
+
+    let responseText = "";
+    let errorText = "";
+
+    const unsubscribe = agent.subscribe((event: AgentEvent) => {
+      if (event.type === "message_end" && event.text) {
+        responseText += (responseText ? "\n\n" : "") + event.text;
+      }
+      if (event.type === "error") {
+        errorText = event.message;
+      }
+    });
+
+    try {
+      await agent.prompt(caption, { images: images.length > 0 ? images : undefined });
     } catch (err: unknown) {
       errorText = err instanceof Error ? err.message : String(err);
     } finally {

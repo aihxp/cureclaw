@@ -9,8 +9,12 @@ import makeWASocket, {
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { Agent } from "../agent.js";
+import { handleAgentCommand } from "../agents/commands.js";
 import { handleCloudCommand } from "../cloud/commands.js";
+import { handleCommandsCommand } from "../commands/commands.js";
+import { handleHooksCommand } from "../hooks/commands.js";
 import { handleMcpCommand } from "../mcp/commands.js";
+import { parseModePrefix } from "../mode.js";
 import { handleSchedulerCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import { handleSkillCommand } from "../skills/commands.js";
@@ -215,6 +219,75 @@ export class WhatsAppChannel implements Channel {
         await this.sendMessage(jid, wsResult.text);
         return;
       }
+
+      const hooksResult = handleHooksCommand(text, this.config.workspace);
+      if (hooksResult) {
+        await this.sendMessage(jid, hooksResult.text);
+        return;
+      }
+
+      const agentResult = handleAgentCommand(text, this.config.workspace);
+      if (agentResult) {
+        await this.sendMessage(jid, agentResult.text);
+        return;
+      }
+
+      const cmdResult = handleCommandsCommand(text, this.config.workspace);
+      if (cmdResult) {
+        if (cmdResult.runPrompt) {
+          const agent = this.getOrCreateAgent(jid);
+          if (agent.state.isStreaming) {
+            await this.sendMessage(jid, "Still processing. Please wait.");
+            return;
+          }
+          await this.sendMessage(jid, cmdResult.text);
+
+          this.setTyping(jid, true);
+          const typingInterval = setInterval(() => {
+            this.setTyping(jid, true);
+          }, TYPING_INTERVAL_MS);
+
+          let responseText = "";
+          let errorText = "";
+          const unsubscribe = agent.subscribe((event: AgentEvent) => {
+            if (event.type === "message_end" && event.text) {
+              responseText += (responseText ? "\n\n" : "") + event.text;
+            }
+            if (event.type === "error") {
+              errorText = event.message;
+            }
+          });
+
+          try {
+            await agent.prompt(cmdResult.runPrompt);
+          } catch (err: unknown) {
+            errorText = err instanceof Error ? err.message : String(err);
+          } finally {
+            clearInterval(typingInterval);
+            this.setTyping(jid, false);
+            unsubscribe();
+          }
+
+          if (errorText) {
+            await this.sendMessage(jid, `Error: ${errorText}`);
+          } else if (responseText.trim()) {
+            await this.sendMessage(jid, responseText);
+          } else {
+            await this.sendMessage(jid, "(No response from command)");
+          }
+          return;
+        }
+        await this.sendMessage(jid, cmdResult.text);
+        return;
+      }
+    }
+
+    // Mode prefix parsing
+    const modeOverride = parseModePrefix(text);
+    const promptOpts: { mode?: import("../mode.js").CursorMode } = {};
+    if (modeOverride) {
+      text = modeOverride.prompt;
+      promptOpts.mode = modeOverride.mode;
     }
 
     // Parse @workstation prefix
@@ -254,7 +327,7 @@ export class WhatsAppChannel implements Channel {
     });
 
     try {
-      await agent.prompt(text);
+      await agent.prompt(text, promptOpts);
     } catch (err: unknown) {
       errorText = err instanceof Error ? err.message : String(err);
     } finally {

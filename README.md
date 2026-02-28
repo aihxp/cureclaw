@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.8 — Cursor CLI agent with workstations, Cloud API, skills, MCP, and plugins
+CureClaw v0.9 — Cursor ecosystem orchestration platform
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -67,6 +67,7 @@ Usage:
 
 Options:
   --model <model>           Model to use (e.g., sonnet-4, gpt-5)
+  --mode <mode>             Agent mode: agent (default), plan, or ask
   --yolo, --force           Auto-approve all tool calls
   --cloud                   Run Cursor agent in cloud mode
   --workstation <name>      Target a registered workstation for remote execution
@@ -87,13 +88,21 @@ Options:
 | `/new` | Clear session, start fresh |
 | `/sessions` | List all saved sessions |
 | `/history` | Show recent prompts for current directory |
-| `/schedule "prompt" <schedule>` | Schedule a recurring job (`--reflect` for verification) |
+| `/mode <agent\|plan\|ask>` | Switch agent mode |
+| `?question` | Run prompt in ask mode (read-only Q&A) |
+| `!instruction` | Run prompt in plan mode (read-only analysis) |
+| `/schedule "prompt" <schedule>` | Schedule a recurring job (`--reflect`, `--mode`) |
 | `/jobs` | List all scheduled jobs |
 | `/cancel <id-prefix>` | Remove a scheduled job |
 | `/pipeline "step1" "step2"` | Run multi-step pipeline (`--reflect` per step) |
 | `/workstation list\|add\|remove\|default\|status` | Manage remote workstations |
 | `@name <prompt>` | Run prompt on a specific workstation |
-| `/cloud <subcommand>` | Cloud agent commands (launch, status, stop, list, conversation, models) |
+| `/cloud <subcommand>` | Cloud agent commands (launch, steer, status, stop, list, conversation, models) |
+| `/hooks list\|add\|remove` | Manage Cursor hooks (.cursor/hooks.json) |
+| `/agents` | List discovered subagents |
+| `/agent create <name>` | Scaffold a new subagent (.cursor/agents/) |
+| `/commands` | List discovered custom commands |
+| `/run <name> [args]` | Run a custom command as a prompt |
 | `/skill create <name>` | Scaffold a new skill |
 | `/skills` | List discovered skills |
 | `/mcp list\|add\|remove` | Manage MCP server configuration |
@@ -236,6 +245,110 @@ export CURSOR_API_KEY=your_key
 
 Scheduler jobs with `--cloud --repo <url>` use the Cloud API directly when `CURSOR_API_KEY` is set.
 
+#### Cloud Steering
+
+Autonomously steer a cloud agent via follow-up prompts until it reaches a satisfactory result:
+
+```bash
+# Launch and steer with default evaluator (stops on LGTM)
+/cloud steer "fix the failing tests" https://github.com/user/repo
+
+# With max follow-ups and model override
+/cloud steer "refactor auth module" https://github.com/user/repo --model sonnet-4 --max 3
+```
+
+Cloud steering launches a cloud agent and automatically sends follow-up prompts when the agent's output doesn't pass the evaluator (default: LGTM detection). It stops when the evaluator is satisfied or the max follow-up count is reached (default: 5).
+
+### Agent Modes
+
+Control how Cursor processes prompts with `--mode`:
+
+```bash
+# Plan mode — read-only analysis, no file changes
+cureclaw --mode plan -p "analyze the auth module for security issues"
+
+# Ask mode — read-only Q&A
+cureclaw --mode ask -p "what does this function do?"
+
+# Agent mode (default) — full agent with tool access
+cureclaw -p "refactor the auth module"
+```
+
+Mode prefixes in prompts:
+- `?question` — runs in ask mode (e.g., `?what does this do?`)
+- `!instruction` — runs in plan mode (e.g., `!analyze this for bugs`)
+
+Switch modes interactively:
+```bash
+/mode plan    # Switch to plan mode
+/mode ask     # Switch to ask mode
+/mode agent   # Switch back to full agent mode
+```
+
+Per-job modes:
+```bash
+/schedule "analyze code quality" every 4h --mode plan
+```
+
+### Hooks
+
+Manage Cursor hooks (`.cursor/hooks.json`) for lifecycle event automation:
+
+```bash
+# List configured hooks
+/hooks list
+
+# Add a hook for an event
+/hooks add sessionStart /path/to/setup.sh --env NODE_ENV=dev
+
+# Remove a hook
+/hooks remove sessionStart /path/to/setup.sh
+```
+
+Supported events: `sessionStart`, `stop`, `beforeSubmitPrompt`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `subagentStart`, `subagentStop`, `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `beforeReadFile`, `afterFileEdit`, `preCompact`, `afterCompact`, `beforeReset`.
+
+### Subagents
+
+Discover and scaffold Cursor subagents (`.cursor/agents/`):
+
+```bash
+# List discovered subagents
+/agents
+
+# Create a new subagent
+/agent create reviewer --readonly --description "Code review specialist"
+
+# With a specific model
+/agent create planner --model sonnet-4 --description "Architecture planner"
+```
+
+Subagents are `.md` files with YAML frontmatter in `.cursor/agents/` (workspace) or `~/.cursor/agents/` (global). Scaffolded agents include frontmatter with name, description, model, readonly, and is_background fields.
+
+### Custom Commands
+
+Discover and run custom Cursor commands (`.cursor/commands/`):
+
+```bash
+# List discovered commands
+/commands
+
+# Run a command (feeds its template as a prompt to the agent)
+/run code-review
+
+# Run with extra context
+/run deploy staging
+```
+
+Commands are `.md` files in `.cursor/commands/` (workspace) or `~/.cursor/commands/` (global). Each file contains an optional YAML frontmatter (description) and a markdown body used as the prompt template.
+
+### Image Attachments
+
+Send images to the agent in cloud mode (Telegram only):
+
+- Send a photo with a caption in a Telegram chat — the image is downloaded, converted to base64, and passed to the Cloud API
+- Maximum 5 images per prompt
+- Requires cloud mode (`--cloud`) and `CURSOR_API_KEY`
+
 ### Skills
 
 Scaffold and discover Cursor skills:
@@ -286,7 +399,7 @@ The build process copies rules, skills, agents, and MCP config (with env var san
 
 ### Steering & Reflection
 
-CureClaw v0.7 adds three interconnected features for multi-step workflows:
+Three interconnected features for multi-step workflows:
 
 **Steering Queues** — Type while the agent is streaming to queue follow-up prompts. They auto-feed after completion, all within the same Cursor session.
 
@@ -364,6 +477,9 @@ Error handling: failed jobs use exponential backoff (30s, 1m, 5m, 15m, 60m) befo
 | `WHATSAPP_ALLOWED_JIDS` | allow all | Comma-separated WhatsApp JIDs |
 | `WHATSAPP_TRIGGER` | — | Trigger word for group messages (e.g., `@CureClaw`) |
 | `WHATSAPP_BOT_NAME` | — | Name prefix for outgoing messages |
+| `CURECLAW_WEBHOOK_PORT` | `0` (auto) | Port for webhook HTTP server |
+| `CURECLAW_WEBHOOK_URL` | auto | External webhook URL (for tunnels/proxies) |
+| `CURECLAW_WEBHOOK_SECRET` | auto-generated | HMAC secret for webhook signature verification |
 
 ## Architecture
 
@@ -373,18 +489,20 @@ src/
 ├── cli.ts                 Interactive readline CLI with ANSI rendering + slash commands
 ├── agent.ts               High-level Agent class with DB persistence + sessionKey
 ├── agent-loop.ts          Cursor event → AgentEvent translation layer
-├── cursor-client.ts       Subprocess wrapper for `cursor agent` (local or SSH, --resume, --cloud)
+├── cursor-client.ts       Subprocess wrapper for `cursor agent` (local or SSH, --resume, --cloud, --mode)
 ├── workstation.ts         Name validation, resolveWorkstation()
 ├── workstation-commands.ts  /workstation add|remove|list|default|status
 ├── db.ts                  SQLite schema, init, session/config/history/jobs/workstations accessors
 ├── event-stream.ts        Generic async iterable event stream
+├── mode.ts                CursorMode type, validation, ?/! prefix parsing
+├── images.ts              Image attachment types + Cloud API conversion
 ├── steering.ts            SteeringQueue — FIFO follow-up prompt buffer
 ├── reflection.ts          Reflection prompt template + pass/fail detection
 ├── pipeline.ts            Pipeline parsing + template interpolation
 ├── types.ts               All type definitions
 ├── channels/
 │   ├── channel.ts         Minimal Channel interface (start/stop)
-│   ├── telegram.ts        Telegram bot (grammY, one Agent per chat)
+│   ├── telegram.ts        Telegram bot (grammY, one Agent per chat, photo → image)
 │   └── whatsapp.ts        WhatsApp bot (Baileys, QR auth, one Agent per JID)
 ├── scheduler/
 │   ├── parse-schedule.ts       Parse schedule strings (at/every/cron)
@@ -395,7 +513,18 @@ src/
 ├── cloud/
 │   ├── types.ts           Cloud API request/response types
 │   ├── client.ts          CloudClient class (native fetch, Basic auth)
-│   └── commands.ts        /cloud launch|status|stop|list|conversation|models
+│   ├── commands.ts        /cloud launch|steer|status|stop|list|conversation|models
+│   └── steering.ts        Autonomous cloud agent loop (follow-up API, evaluators)
+├── hooks/
+│   ├── config.ts          Read/write .cursor/hooks.json
+│   └── commands.ts        /hooks list|add|remove
+├── agents/
+│   ├── list.ts            .cursor/agents/ discovery (subagent .md files)
+│   ├── scaffold.ts        Subagent scaffolding
+│   └── commands.ts        /agents, /agent create
+├── commands/
+│   ├── list.ts            .cursor/commands/ discovery
+│   └── commands.ts        /commands, /run
 ├── skills/
 │   ├── scaffold.ts        Generate skill dir + SKILL.md template
 │   ├── list.ts            Discover skills from standard paths
@@ -403,6 +532,8 @@ src/
 ├── mcp/
 │   ├── config.ts          Read/write .cursor/mcp.json
 │   └── commands.ts        /mcp list|add|remove
+├── webhook/
+│   └── server.ts          Lightweight HTTP webhook receiver (node:http, HMAC-SHA256)
 └── plugin/
     ├── manifest.ts        Generate plugin.json manifest
     ├── build.ts           Assemble plugin from workspace artifacts
@@ -603,6 +734,7 @@ Read-only access to current agent state.
 interface AgentState {
   sessionId: string | null;        // Current Cursor session ID
   model: string;                   // Active model name
+  mode: CursorMode;                // Current mode: "agent" | "plan" | "ask"
   isStreaming: boolean;             // True while processing a prompt
   thinkingText: string;            // Accumulated thinking text
   messageText: string;             // Accumulated message text
@@ -794,12 +926,15 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] **Scheduler integration** — `--workstation <name>` on scheduled jobs
 - [x] **Per-workstation sessions** — session keys prefixed with `ws:<name>:` for isolation
 
-### v0.9 — Event-Driven Autonomy
-- [ ] **Webhook triggers** — HTTP endpoint that accepts external signals (GitHub, CI/CD, monitoring) and spawns agent jobs
-- [ ] **File watchers** — trigger agent when workspace files change (new logs, build failures, git events)
-- [ ] **Conditional chains** — "when job A finishes with status X, run job B" (job dependency graph)
-- [ ] **Inactivity triggers** — "if no commit in N hours, run code review" (pattern-based scheduling)
-- [ ] **Continuous context injection** — auto-inject recent git diff, failing tests, open issues before each prompt
+### v0.9 — Cursor Ecosystem Deep Integration
+- [x] **Agent modes** — `--mode plan|ask` for read-only analysis and Q&A; `?`/`!` prompt prefixes
+- [x] **Cloud steering** — autonomous cloud agent loop with follow-up API and evaluators
+- [x] **Webhook server** — lightweight HTTP receiver with HMAC-SHA256 verification for cloud agent status changes
+- [x] **Hooks management** — read/write `.cursor/hooks.json` with 17 supported lifecycle events
+- [x] **Subagent discovery** — discover and scaffold `.cursor/agents/*.md` subagents
+- [x] **Custom commands** — discover and run `.cursor/commands/*.md` prompt templates
+- [x] **Image attachments** — Telegram photo → base64 → Cloud API passthrough
+- [x] **Per-job modes** — `/schedule` with `--mode plan|ask` flag
 
 ### v0.10 — Multi-Agent Orchestration
 - [ ] **Planner agent** — decomposes high-level goals into subtask tree

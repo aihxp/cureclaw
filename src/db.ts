@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import type { CursorMode } from "./mode.js";
 import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation } from "./types.js";
 
 let db: Database.Database;
@@ -90,6 +91,9 @@ function migrateSchema(database: Database.Database): void {
   }
   if (!names.has("workstation")) {
     database.exec("ALTER TABLE jobs ADD COLUMN workstation TEXT");
+  }
+  if (!names.has("mode")) {
+    database.exec("ALTER TABLE jobs ADD COLUMN mode TEXT");
   }
 }
 
@@ -230,6 +234,7 @@ interface JobRow {
   reflect: number;
   pipeline: string | null;
   workstation: string | null;
+  mode: string | null;
   enabled: number;
   created_at: string;
   next_run_at: string | null;
@@ -290,6 +295,7 @@ function jobRowToJob(row: JobRow): Job {
     reflect: row.reflect === 1,
     pipeline,
     workstation: row.workstation ?? undefined,
+    mode: (row.mode as CursorMode) ?? undefined,
     enabled: row.enabled === 1,
     createdAt: row.created_at,
     nextRunAt: row.next_run_at,
@@ -307,8 +313,8 @@ export function addJob(job: Omit<Job, "id" | "lastRunAt" | "lastStatus" | "lastE
   const now = new Date().toISOString();
 
   db.prepare(
-    `INSERT INTO jobs (id, name, prompt, schedule_kind, schedule_value, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, repository, reflect, pipeline, workstation, enabled, created_at, next_run_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO jobs (id, name, prompt, schedule_kind, schedule_value, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, repository, reflect, pipeline, workstation, mode, enabled, created_at, next_run_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     job.name,
@@ -323,6 +329,7 @@ export function addJob(job: Omit<Job, "id" | "lastRunAt" | "lastStatus" | "lastE
     job.reflect ? 1 : 0,
     job.pipeline ? JSON.stringify(job.pipeline) : null,
     job.workstation ?? null,
+    job.mode ?? null,
     job.enabled ? 1 : 0,
     now,
     job.nextRunAt,

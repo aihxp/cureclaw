@@ -163,6 +163,7 @@ export class Scheduler {
       ...this.config,
       cloud: job.cloud || this.config.cloud,
       workstation: job.workstation,
+      mode: job.mode,
     };
 
     const agent = new Agent(agentConfig, {

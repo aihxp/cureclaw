@@ -25,6 +25,9 @@ function buildCursorArgs(prompt: string, config: CursorAgentConfig): string[] {
     args.push("--yolo");
     args.push("--approve-mcps");
   }
+  if (config.mode && config.mode !== "agent") {
+    args.push("--mode", config.mode);
+  }
   if (config.cloud) {
     args.push("--cloud");
   }

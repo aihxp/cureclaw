@@ -2,9 +2,13 @@ import path from "node:path";
 import os from "node:os";
 import * as readline from "node:readline";
 import { Agent } from "./agent.js";
+import { handleAgentCommand } from "./agents/commands.js";
 import { handleCloudCommand } from "./cloud/commands.js";
+import { handleCommandsCommand } from "./commands/commands.js";
 import { getSession, getAllSessions, getHistory } from "./db.js";
+import { handleHooksCommand } from "./hooks/commands.js";
 import { handleMcpCommand } from "./mcp/commands.js";
+import { isValidMode, parseModePrefix } from "./mode.js";
 import { handlePluginCommand } from "./plugin/commands.js";
 import { handleSchedulerCommand, handlePipelineCommand } from "./scheduler/commands.js";
 import { handleSkillCommand } from "./skills/commands.js";
@@ -43,7 +47,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.8") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.9") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -52,7 +56,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.8") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.9") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -85,6 +89,20 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     // Handle slash commands
     if (trimmed.startsWith("/")) {
       await handleCommand(trimmed, agent, cwd, workspace, config);
+      rl.prompt();
+      return;
+    }
+
+    // Mode prefix: ?question → ask mode, !instruction → plan mode
+    const modeOverride = parseModePrefix(trimmed);
+    if (modeOverride) {
+      try {
+        await agent.prompt(modeOverride.prompt, { mode: modeOverride.mode });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(red(`Error: ${msg}`));
+      }
+      console.log();
       rl.prompt();
       return;
     }
@@ -201,6 +219,38 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
     return;
   }
 
+  // 4a. Hooks commands (sync)
+  const hooksResult = handleHooksCommand(cmd, workspace);
+  if (hooksResult) {
+    console.log(hooksResult.text);
+    return;
+  }
+
+  // 4b. Agent commands (sync)
+  const agentResult = handleAgentCommand(cmd, workspace);
+  if (agentResult) {
+    console.log(agentResult.text);
+    return;
+  }
+
+  // 4c. Commands discovery + /run (sync, but may trigger prompt)
+  const cmdResult = handleCommandsCommand(cmd, workspace);
+  if (cmdResult) {
+    if (cmdResult.runPrompt) {
+      console.log(cmdResult.text);
+      try {
+        await agent.prompt(cmdResult.runPrompt);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(red(`Error: ${msg}`));
+      }
+      console.log();
+    } else {
+      console.log(cmdResult.text);
+    }
+    return;
+  }
+
   // 5. Plugin commands (sync)
   const pluginResult = handlePluginCommand(cmd, workspace);
   if (pluginResult) {
@@ -208,7 +258,22 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
     return;
   }
 
-  // 6. Built-in commands
+  // 6. Mode command
+  if (cmd === "/mode" || cmd.startsWith("/mode ")) {
+    const modeArg = cmd.slice(5).trim();
+    if (!modeArg) {
+      console.log(`Current mode: ${bold(agent.state.mode)}`);
+      console.log(dim("Usage: /mode <agent|plan|ask>"));
+    } else if (isValidMode(modeArg)) {
+      agent.setMode(modeArg);
+      console.log(green(`Mode set to: ${modeArg}`));
+    } else {
+      console.log(red(`Invalid mode: "${modeArg}". Valid modes: agent, plan, ask`));
+    }
+    return;
+  }
+
+  // 7. Built-in commands
   switch (cmd) {
     case "/new": {
       agent.newSession();
@@ -259,14 +324,20 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
     case "/help": {
       console.log(bold("Commands:\n"));
       console.log("  /new           Clear session, start fresh");
+      console.log("  /mode          Set agent mode: /mode <agent|plan|ask>");
       console.log("  /sessions      List all saved sessions");
       console.log("  /history       Show recent prompts for this directory");
-      console.log('  /schedule      Schedule a job: /schedule "prompt" <schedule> [--cloud] [--reflect] [--workstation <name>]');
+      console.log('  /schedule      Schedule a job: /schedule "prompt" <schedule> [--cloud] [--reflect] [--workstation <name>] [--mode <m>]');
       console.log("  /jobs          List all scheduled jobs");
       console.log("  /cancel        Cancel a job: /cancel <id-prefix>");
       console.log('  /pipeline      Run multi-step pipeline: /pipeline "step1" [--reflect] "step2"');
-      console.log("  /cloud         Cloud agent commands (launch, status, stop, list, conversation, models)");
+      console.log("  /cloud         Cloud agent commands (launch, steer, status, stop, list, conversation, models)");
       console.log("  /workstation   Workstation commands (list, add, remove, default, status)");
+      console.log("  /hooks         Hook commands (list, add, remove)");
+      console.log("  /agents        List discovered subagents");
+      console.log("  /agent create  Create a subagent: /agent create <name> [--readonly] [--model <m>]");
+      console.log("  /commands      List discovered custom commands");
+      console.log("  /run           Run a custom command: /run <name> [context]");
       console.log("  /skill create  Create a new skill: /skill create <name>");
       console.log("  /skills        List discovered skills");
       console.log("  /mcp           MCP server commands (list, add, remove)");
@@ -276,6 +347,7 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log();
       console.log(dim("Tip: Type while agent is streaming to queue follow-up prompts."));
       console.log(dim("Tip: Use @name before a prompt to target a workstation (e.g., @dev explain this)."));
+      console.log(dim("Tip: Prefix with ? for ask mode or ! for plan mode (e.g., ?what does this do)."));
       console.log();
       break;
     }
@@ -372,6 +444,18 @@ function renderEvent(event: AgentEvent): void {
 
     case "pipeline_end":
       console.log(dim("[pipeline] Complete"));
+      break;
+
+    case "cloud_steer_start":
+      console.log(dim(`\n[cloud steer] Agent ${event.agentId} launched`));
+      break;
+
+    case "cloud_steer_followup":
+      console.log(dim(`[cloud steer] Follow-up #${event.followupNumber}: ${event.prompt.slice(0, 60)}`));
+      break;
+
+    case "cloud_steer_end":
+      console.log(dim(`[cloud steer] Done (${event.totalFollowups} follow-ups)`));
       break;
   }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { initDatabase, closeDatabase, clearSession } from "./db.js";
+import { isValidMode } from "./mode.js";
 import { Scheduler } from "./scheduler/scheduler.js";
 import { startCli } from "./cli.js";
 import type { CursorAgentConfig } from "./types.js";
@@ -68,6 +69,13 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--workstation":
         config.workstationFlag = argv[++i];
         break;
+      case "--mode": {
+        const m = argv[++i];
+        if (m && isValidMode(m)) {
+          config.mode = m;
+        }
+        break;
+      }
       case "--help":
       case "-h":
         printUsage();
@@ -79,7 +87,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.8 — Cursor CLI agent with workstations, Cloud API, skills, MCP, and plugin support
+  console.log(`CureClaw v0.9 — Cursor ecosystem orchestration platform
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -89,6 +97,7 @@ Usage:
 
 Options:
   --model <model>           Model to use (e.g., sonnet-4, gpt-5)
+  --mode <mode>             Agent mode: agent (default), plan, or ask
   --yolo, --force           Auto-approve all tool calls
   --cloud                   Run Cursor agent in cloud mode
   --workstation <name>      Target a registered workstation for remote execution
@@ -100,6 +109,10 @@ Options:
   --whatsapp                Start as a WhatsApp bot (uses Baileys, QR auth)
   -p, --prompt <text>       Run a single prompt and exit
   -h, --help                Show this help
+
+Mode prefixes (in prompts):
+  ?question                 Run in ask mode (read-only Q&A)
+  !instruction              Run in plan mode (read-only analysis)
 
 Workstation commands:
   /workstation list                           List registered workstations
@@ -119,11 +132,28 @@ Pipeline commands:
 
 Cloud commands:
   /cloud launch "prompt" <repo-url> [--model <m>] [--pr]
+  /cloud steer "prompt" <repo-url> [--model <m>] [--max <n>]
   /cloud status <id>    Get agent status
   /cloud stop <id>      Stop a running agent
   /cloud list           List recent agents
   /cloud conversation <id>   Get agent transcript
   /cloud models         List available models
+
+Mode commands:
+  /mode <agent|plan|ask>  Switch agent mode
+
+Hooks commands:
+  /hooks list             List configured hooks
+  /hooks add <event> <command> [args]   Add a hook
+  /hooks remove <event> <command>       Remove a hook
+
+Subagent commands:
+  /agents               List discovered subagents
+  /agent create <name>  Scaffold a new subagent
+
+Custom commands:
+  /commands             List discovered commands
+  /run <name> [args]    Run a custom command
 
 Skill commands:
   /skill create <name>  Scaffold a new skill
@@ -153,6 +183,9 @@ Environment:
   WHATSAPP_ALLOWED_JIDS   Comma-separated WhatsApp JIDs (optional)
   WHATSAPP_TRIGGER        Trigger word for group messages (e.g., @CureClaw)
   WHATSAPP_BOT_NAME       Name prefix for outgoing messages (optional)
+  CURECLAW_WEBHOOK_PORT   Port for webhook HTTP server (0 = auto-assign)
+  CURECLAW_WEBHOOK_URL    External webhook URL (for tunnels/proxies)
+  CURECLAW_WEBHOOK_SECRET HMAC secret for webhook verification (auto-generated)
 `);
 }
 

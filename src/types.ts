@@ -1,3 +1,6 @@
+import type { CursorMode } from "./mode.js";
+export type { CursorMode } from "./mode.js";
+
 // ============================================================================
 // Cursor CLI stream-json output types (what cursor agent emits on stdout)
 // ============================================================================
@@ -157,7 +160,11 @@ export type AgentEvent =
   | { type: "pipeline_start"; stepCount: number }
   | { type: "step_start"; stepIndex: number; prompt: string }
   | { type: "step_end"; stepIndex: number }
-  | { type: "pipeline_end" };
+  | { type: "pipeline_end" }
+  // Cloud steering
+  | { type: "cloud_steer_start"; agentId: string }
+  | { type: "cloud_steer_followup"; agentId: string; followupNumber: number; prompt: string }
+  | { type: "cloud_steer_end"; agentId: string; totalFollowups: number };
 
 // ============================================================================
 // Workstation (remote execution via SSH)
@@ -197,11 +204,14 @@ export interface CursorAgentConfig {
   extraArgs?: string[];
   /** Workstation name for remote execution via SSH */
   workstation?: string;
+  /** Cursor agent mode (ask, plan, or agent) */
+  mode?: CursorMode;
 }
 
 export interface AgentState {
   sessionId: string | null;
   model: string;
+  mode: CursorMode;
   isStreaming: boolean;
   thinkingText: string;
   messageText: string;
@@ -247,6 +257,7 @@ export interface Job {
   reflect: boolean;
   pipeline?: Pipeline;
   workstation?: string;
+  mode?: CursorMode;
   enabled: boolean;
   createdAt: string;
   nextRunAt: string | null;

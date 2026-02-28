@@ -1,5 +1,6 @@
 import type { CommandContext, CommandResult } from "../scheduler/commands.js";
 import { getCloudClient } from "./client.js";
+import { steerCloudAgent } from "./steering.js";
 
 /**
  * Handle /cloud subcommands.
@@ -19,6 +20,7 @@ export function handleCloudCommand(
       text: [
         "Cloud commands:",
         '  /cloud launch "prompt" <repo-url> [--model <m>] [--pr]',
+        '  /cloud steer "prompt" <repo-url> [--model <m>] [--max <n>]',
         "  /cloud status <id>",
         "  /cloud stop <id>",
         "  /cloud list",
@@ -35,6 +37,7 @@ export function handleCloudCommand(
   if (rest === "status" || rest.startsWith("status ")) return handleStatus(rest.slice(7).trim());
   if (rest === "stop" || rest.startsWith("stop ")) return handleStop(rest.slice(5).trim());
   if (rest === "conversation" || rest.startsWith("conversation ")) return handleConversation(rest.slice(13).trim());
+  if (rest.startsWith("steer ")) return handleSteer(rest.slice(6).trim());
   if (rest.startsWith("launch ")) return handleLaunch(rest.slice(7).trim());
 
   return Promise.resolve({
@@ -165,6 +168,64 @@ async function handleLaunch(args: string): Promise<CommandResult> {
   } catch (err) {
     return { text: `Error: ${errorMessage(err)}` };
   }
+}
+
+async function handleSteer(args: string): Promise<CommandResult> {
+  // Parse: "prompt" <repo-url> [--model <m>] [--max <n>]
+  const match = args.match(/^"((?:[^"\\]|\\.)*)"\s+(\S+)(.*)$/);
+  if (!match) {
+    return {
+      text: 'Usage: /cloud steer "prompt" <repo-url> [--model <model>] [--max <n>]',
+    };
+  }
+
+  const prompt = match[1].replace(/\\"/g, '"');
+  const repoUrl = match[2];
+  const flags = match[3].trim();
+
+  let model: string | undefined;
+  let maxFollowups = 5;
+
+  const modelMatch = flags.match(/--model\s+(\S+)/);
+  if (modelMatch) model = modelMatch[1];
+  const maxMatch = flags.match(/--max\s+(\d+)/);
+  if (maxMatch) maxFollowups = parseInt(maxMatch[1], 10);
+
+  const client = getCloudClient();
+  if (!client) return noApiKey();
+
+  const lines: string[] = [];
+
+  try {
+    for await (const event of steerCloudAgent({
+      client,
+      request: {
+        prompt: { text: prompt },
+        model,
+        source: { repository: repoUrl },
+      },
+      maxFollowups,
+    })) {
+      switch (event.type) {
+        case "launch":
+          lines.push(`Agent launched: ${event.agentId}`);
+          break;
+        case "followup":
+          lines.push(`Follow-up #${event.followupNumber}: ${event.result}`);
+          break;
+        case "done":
+          lines.push(`Done. Result: ${(event.result ?? "").slice(0, 500)}`);
+          break;
+        case "error":
+          lines.push(`Error: ${event.error}`);
+          break;
+      }
+    }
+  } catch (err) {
+    lines.push(`Error: ${errorMessage(err)}`);
+  }
+
+  return { text: lines.join("\n") };
 }
 
 function noApiKey(): CommandResult {

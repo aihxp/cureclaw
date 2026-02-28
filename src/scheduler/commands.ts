@@ -1,4 +1,5 @@
 import { addJob, getAllJobs, findJobByIdPrefix, removeJob } from "../db.js";
+import { isValidMode, type CursorMode } from "../mode.js";
 import { parsePipelineArgs } from "../pipeline.js";
 import type { DeliveryTarget, Job, Pipeline } from "../types.js";
 import { parseSchedule } from "./parse-schedule.js";
@@ -55,6 +56,7 @@ function handleSchedule(args: string, ctx: CommandContext): CommandResult {
   let reflect = false;
   let repository: string | undefined;
   let workstation: string | undefined;
+  let mode: CursorMode | undefined;
 
   // Extract --repo flag
   const repoMatch = scheduleStr.match(/--repo\s+(\S+)/);
@@ -68,6 +70,15 @@ function handleSchedule(args: string, ctx: CommandContext): CommandResult {
   if (wsMatch) {
     workstation = wsMatch[1];
     scheduleStr = scheduleStr.replace(/--workstation\s+\S+/, "").trim();
+  }
+
+  // Extract --mode flag
+  const modeMatch = scheduleStr.match(/--mode\s+(\S+)/);
+  if (modeMatch) {
+    if (isValidMode(modeMatch[1])) {
+      mode = modeMatch[1];
+    }
+    scheduleStr = scheduleStr.replace(/--mode\s+\S+/, "").trim();
   }
 
   if (scheduleStr.includes("--reflect")) {
@@ -111,13 +122,14 @@ function handleSchedule(args: string, ctx: CommandContext): CommandResult {
     repository,
     reflect,
     workstation,
+    mode,
     enabled: true,
     createdAt: now.toISOString(),
     nextRunAt,
   });
 
   return {
-    text: `Job ${job.id} created.\nSchedule: ${formatSchedule(job.schedule)}\nNext run: ${formatDate(job.nextRunAt)}\nDelivery: ${formatDelivery(job.delivery)}${cloud ? "\nMode: cloud" : ""}${reflect ? "\nReflect: on" : ""}${repository ? `\nRepo: ${repository}` : ""}${workstation ? `\nWorkstation: ${workstation}` : ""}`,
+    text: `Job ${job.id} created.\nSchedule: ${formatSchedule(job.schedule)}\nNext run: ${formatDate(job.nextRunAt)}\nDelivery: ${formatDelivery(job.delivery)}${cloud ? "\nCloud: yes" : ""}${reflect ? "\nReflect: on" : ""}${repository ? `\nRepo: ${repository}` : ""}${workstation ? `\nWorkstation: ${workstation}` : ""}${mode ? `\nMode: ${mode}` : ""}`,
   };
 }
 
