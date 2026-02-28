@@ -9,6 +9,8 @@ import makeWASocket, {
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { Agent } from "../agent.js";
+import { handleSchedulerCommand } from "../scheduler/commands.js";
+import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
 
@@ -44,7 +46,15 @@ export class WhatsAppChannel implements Channel {
     this.config = config;
   }
 
+  async sendTo(jid: string, text: string): Promise<void> {
+    await this.sendMessage(jid, text);
+  }
+
   async start(): Promise<void> {
+    registerDeliveryHandler("whatsapp", async (channelId, text) => {
+      await this.sendTo(channelId, text);
+    });
+
     return new Promise<void>((resolve, reject) => {
       this.connectInternal(resolve).catch(reject);
     });
@@ -52,6 +62,7 @@ export class WhatsAppChannel implements Channel {
 
   async stop(): Promise<void> {
     console.log("[whatsapp] Shutting down...");
+    unregisterDeliveryHandler("whatsapp");
     for (const agent of this.agents.values()) {
       if (agent.state.isStreaming) agent.abort();
     }
@@ -165,6 +176,18 @@ export class WhatsAppChannel implements Channel {
   }
 
   private async handleMessage(jid: string, text: string): Promise<void> {
+    // Intercept scheduler commands
+    if (text.startsWith("/")) {
+      const result = handleSchedulerCommand(text, {
+        channelType: "whatsapp",
+        channelId: jid,
+      });
+      if (result) {
+        await this.sendMessage(jid, result.text);
+        return;
+      }
+    }
+
     const agent = this.getOrCreateAgent(jid);
 
     if (agent.state.isStreaming) {

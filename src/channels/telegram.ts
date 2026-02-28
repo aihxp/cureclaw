@@ -1,5 +1,7 @@
 import { Bot, type Context } from "grammy";
 import { Agent } from "../agent.js";
+import { handleSchedulerCommand } from "../scheduler/commands.js";
+import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
 
@@ -24,7 +26,15 @@ export class TelegramChannel implements Channel {
     this.bot = new Bot(config.token);
   }
 
+  async sendTo(chatId: number, text: string): Promise<void> {
+    await this.sendResponse(chatId, text);
+  }
+
   async start(): Promise<void> {
+    registerDeliveryHandler("telegram", async (channelId, text) => {
+      await this.sendTo(Number(channelId), text);
+    });
+
     this.bot.command("start", async (ctx) => {
       if (!this.isAllowed(ctx.from?.id)) {
         await ctx.reply("Access denied.");
@@ -55,6 +65,37 @@ export class TelegramChannel implements Channel {
       );
     });
 
+    this.bot.command("schedule", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim();
+      const result = handleSchedulerCommand(`/schedule ${args}`, {
+        channelType: "telegram",
+        channelId: String(chatId),
+      });
+      await ctx.reply(result?.text ?? "Usage: /schedule \"prompt\" <schedule>");
+    });
+
+    this.bot.command("jobs", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const result = handleSchedulerCommand("/jobs", {
+        channelType: "telegram",
+        channelId: String(ctx.chat?.id ?? 0),
+      });
+      await ctx.reply(result?.text ?? "No jobs.");
+    });
+
+    this.bot.command("cancel", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const idPrefix = ctx.match?.toString().trim();
+      const result = handleSchedulerCommand(`/cancel ${idPrefix}`, {
+        channelType: "telegram",
+        channelId: String(ctx.chat?.id ?? 0),
+      });
+      await ctx.reply(result?.text ?? "Usage: /cancel <id-prefix>");
+    });
+
     this.bot.on("message:text", async (ctx) => {
       await this.handleMessage(ctx);
     });
@@ -73,6 +114,7 @@ export class TelegramChannel implements Channel {
 
   async stop(): Promise<void> {
     console.log("[telegram] Shutting down...");
+    unregisterDeliveryHandler("telegram");
     for (const agent of this.agents.values()) {
       if (agent.state.isStreaming) agent.abort();
     }

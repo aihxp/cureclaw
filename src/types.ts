@@ -165,6 +165,8 @@ export interface CursorAgentConfig {
   streamPartialOutput?: boolean;
   /** Resume a specific Cursor session by chatId */
   sessionId?: string;
+  /** Run in Cursor cloud mode (--cloud) */
+  cloud?: boolean;
   /** Additional CLI args */
   extraArgs?: string[];
 }
@@ -177,4 +179,34 @@ export interface AgentState {
   messageText: string;
   pendingToolCalls: Set<string>;
   error: string | null;
+}
+
+// ============================================================================
+// Scheduler types
+// ============================================================================
+
+export type JobSchedule =
+  | { kind: "at"; at: string }
+  | { kind: "every"; everyMs: number }
+  | { kind: "cron"; expr: string };
+
+export type DeliveryTarget =
+  | { kind: "store" }
+  | { kind: "channel"; channelType: string; channelId: string };
+
+export interface Job {
+  id: string;
+  name: string;
+  prompt: string;
+  schedule: JobSchedule;
+  delivery: DeliveryTarget;
+  cloud: boolean;
+  enabled: boolean;
+  createdAt: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastStatus: "success" | "error" | null;
+  lastError: string | null;
+  lastResult: string | null;
+  consecutiveErrors: number;
 }

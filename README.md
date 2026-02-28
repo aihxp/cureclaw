@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.4 — Cursor CLI agent with session persistence
+CureClaw v0.5 — Cursor CLI agent with scheduler and cloud mode
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -68,6 +68,7 @@ Usage:
 Options:
   --model <model>       Model to use (e.g., sonnet-4, gpt-5)
   --yolo, --force       Auto-approve all tool calls
+  --cloud               Run Cursor agent in cloud mode
   --cwd <dir>           Working directory for cursor agent
   --cursor-path <path>  Path to cursor CLI binary
   --no-stream           Disable partial output streaming
@@ -85,6 +86,9 @@ Options:
 | `/new` | Clear session, start fresh |
 | `/sessions` | List all saved sessions |
 | `/history` | Show recent prompts for current directory |
+| `/schedule "prompt" <schedule>` | Schedule a recurring job |
+| `/jobs` | List all scheduled jobs |
+| `/cancel <id-prefix>` | Remove a scheduled job |
 | `/help` | Show available commands |
 | `/quit` | Exit CureClaw |
 | `Ctrl+C` | Abort current prompt (if streaming) or exit (if idle) |
@@ -147,6 +151,54 @@ WHATSAPP_BOT_NAME=CureClaw cureclaw --whatsapp
 - DMs always get a response; group messages require the trigger word (if set)
 - Outgoing message queue buffers during disconnects and flushes on reconnect
 
+### Cloud Mode
+
+Run Cursor agent in cloud mode (isolated VMs with computer use, subagents, and plugins):
+
+```bash
+# One-shot with cloud
+cureclaw --cloud -p "deploy the staging environment"
+
+# Interactive with cloud
+cureclaw --cloud
+
+# Cloud jobs via scheduler
+/schedule "run nightly tests" every 24h --cloud
+```
+
+### Job Scheduler
+
+Schedule recurring or one-shot jobs from any channel (CLI, Telegram, WhatsApp):
+
+```bash
+# Schedule a job that runs every hour
+/schedule "check system health" every 1h
+
+# Schedule a one-shot job at a specific time
+/schedule "generate weekly report" at 2026-03-07T09:00:00Z
+
+# Schedule a weekday job using cron
+/schedule "morning standup summary" cron 0 9 * * 1-5
+
+# Schedule with cloud mode
+/schedule "run integration tests" every 4h --cloud
+
+# List all jobs
+/jobs
+
+# Cancel a job by ID prefix
+/cancel a3f2
+```
+
+Schedule formats:
+- `every <N><s|m|h|d>` — interval (e.g., `every 30m`, `every 4h`)
+- `at <ISO8601>` — one-shot at a specific time (auto-disables after execution)
+- `cron <5-field>` — standard 5-field cron (minute hour day month weekday)
+
+When scheduled from a channel (Telegram/WhatsApp), results are delivered back to the originating chat. CLI jobs store results in the database.
+
+Error handling: failed jobs use exponential backoff (30s, 1m, 5m, 15m, 60m) before retrying.
+
 ### Environment Variables
 
 | Variable | Default | Description |
@@ -168,14 +220,20 @@ src/
 ├── cli.ts                 Interactive readline CLI with ANSI rendering + slash commands
 ├── agent.ts               High-level Agent class with DB persistence + sessionKey
 ├── agent-loop.ts          Cursor event → AgentEvent translation layer
-├── cursor-client.ts       Subprocess wrapper for `cursor agent` (supports --resume)
-├── db.ts                  SQLite schema, init, session/config/history accessors
+├── cursor-client.ts       Subprocess wrapper for `cursor agent` (supports --resume, --cloud)
+├── db.ts                  SQLite schema, init, session/config/history/jobs accessors
 ├── event-stream.ts        Generic async iterable event stream
 ├── types.ts               All type definitions
-└── channels/
-    ├── channel.ts         Minimal Channel interface (start/stop)
-    ├── telegram.ts        Telegram bot (grammY, one Agent per chat)
-    └── whatsapp.ts        WhatsApp bot (Baileys, QR auth, one Agent per JID)
+├── channels/
+│   ├── channel.ts         Minimal Channel interface (start/stop)
+│   ├── telegram.ts        Telegram bot (grammY, one Agent per chat)
+│   └── whatsapp.ts        WhatsApp bot (Baileys, QR auth, one Agent per JID)
+└── scheduler/
+    ├── parse-schedule.ts       Parse schedule strings (at/every/cron)
+    ├── compute-next-run.ts     Compute next run time for all schedule kinds
+    ├── delivery.ts             Delivery handler registry (channels register on start)
+    ├── commands.ts             Shared /schedule, /jobs, /cancel command handlers
+    └── scheduler.ts            Timer loop: check due jobs, execute, deliver, re-arm
 ```
 
 ### Layer Diagram
@@ -184,16 +242,19 @@ src/
 ┌─────────────────────────────────────────────┐
 │  CLI / Telegram / WhatsApp / Your App       │
 │  Subscribes to AgentEvents, renders output  │
-├─────────────────────────────────────────────┤
+├──────────────────────┬──────────────────────┤
+│  Scheduler           │  Delivery Registry   │
+│  Timer loop, backoff │  Channel handlers    │
+├──────────────────────┴──────────────────────┤
 │  Agent                                      │
 │  State management, DB persistence, resume   │
 ├──────────────────────┬──────────────────────┤
 │  Agent Loop          │  SQLite (db.ts)      │
 │  CursorEvent →       │  sessions, history,  │
-│  AgentEvent          │  config              │
+│  AgentEvent          │  config, jobs        │
 ├──────────────────────┴──────────────────────┤
 │  Cursor Client                              │
-│  Spawns subprocess, --resume, NDJSON parse  │
+│  Spawns subprocess, --resume, --cloud       │
 ├─────────────────────────────────────────────┤
 │  Cursor CLI (external binary)               │
 │  cursor agent --print --output-format ...   │
@@ -315,6 +376,7 @@ const config: CursorAgentConfig = {
   model: "sonnet-4",          // Optional model override
   cwd: "/path/to/project",    // Working directory
   autoApprove: true,          // --yolo flag
+  cloud: false,               // --cloud flag for cloud mode
   streamPartialOutput: true,  // --stream-partial-output flag
   extraArgs: [],               // Additional CLI args
 };
@@ -537,8 +599,9 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] SQLite state persistence
 - [x] Telegram channel
 - [x] WhatsApp channel
+- [x] Cloud mode (`--cloud` for Cursor cloud agents)
+- [x] Job scheduler (cron/interval/one-shot with delivery pipeline)
 - [ ] Steering and follow-up queues (Pi's full loop pattern)
-- [ ] Container-based agent isolation
 - [ ] Multi-agent orchestration
 
 ## License

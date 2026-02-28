@@ -2,6 +2,7 @@ import path from "node:path";
 import * as readline from "node:readline";
 import { Agent } from "./agent.js";
 import { getSession, getAllSessions, getHistory } from "./db.js";
+import { handleSchedulerCommand } from "./scheduler/commands.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
 // ANSI helpers
@@ -32,7 +33,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.3") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.5") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -41,7 +42,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.3") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.5") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -98,6 +99,16 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
 }
 
 function handleCommand(cmd: string, agent: Agent, cwd: string): void {
+  // Try scheduler commands first
+  const schedResult = handleSchedulerCommand(cmd, {
+    channelType: "cli",
+    channelId: "cli",
+  });
+  if (schedResult) {
+    console.log(schedResult.text);
+    return;
+  }
+
   switch (cmd) {
     case "/new": {
       agent.newSession();
@@ -150,6 +161,9 @@ function handleCommand(cmd: string, agent: Agent, cwd: string): void {
       console.log("  /new        Clear session, start fresh");
       console.log("  /sessions   List all saved sessions");
       console.log("  /history    Show recent prompts for this directory");
+      console.log('  /schedule   Schedule a job: /schedule "prompt" <schedule> [--cloud]');
+      console.log("  /jobs       List all scheduled jobs");
+      console.log("  /cancel     Cancel a job: /cancel <id-prefix>");
       console.log("  /help       Show this help");
       console.log("  /quit       Exit CureClaw");
       console.log();

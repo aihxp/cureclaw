@@ -40,10 +40,16 @@ src/
 ├── db.ts              SQLite persistence (better-sqlite3)
 ├── cli.ts             Terminal UI
 ├── index.ts           Entry point
-└── channels/
-    ├── channel.ts     Channel interface (start/stop)
-    ├── telegram.ts    Telegram bot (grammY)
-    └── whatsapp.ts    WhatsApp bot (Baileys)
+├── channels/
+│   ├── channel.ts     Channel interface (start/stop)
+│   ├── telegram.ts    Telegram bot (grammY)
+│   └── whatsapp.ts    WhatsApp bot (Baileys)
+└── scheduler/
+    ├── parse-schedule.ts       Parse schedule strings (at/every/cron)
+    ├── compute-next-run.ts     Compute next run time for schedules
+    ├── delivery.ts             Delivery handler registry
+    ├── commands.ts             /schedule, /jobs, /cancel command handlers
+    └── scheduler.ts            Timer loop: check due jobs, execute, deliver
 ```
 
 ## Adding a New AgentEvent Type

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { initDatabase, closeDatabase, clearSession } from "./db.js";
+import { Scheduler } from "./scheduler/scheduler.js";
 import { startCli } from "./cli.js";
 import type { CursorAgentConfig } from "./types.js";
 import path from "node:path";
@@ -60,6 +61,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--whatsapp":
         config.whatsapp = true;
         break;
+      case "--cloud":
+        config.cloud = true;
+        break;
       case "--help":
       case "-h":
         printUsage();
@@ -71,7 +75,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.4 — Cursor CLI agent with session persistence
+  console.log(`CureClaw v0.5 — Cursor CLI agent with scheduler and cloud mode
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -82,6 +86,7 @@ Usage:
 Options:
   --model <model>       Model to use (e.g., sonnet-4, gpt-5)
   --yolo, --force       Auto-approve all tool calls
+  --cloud               Run Cursor agent in cloud mode
   --cwd <dir>           Working directory for cursor agent
   --cursor-path <path>  Path to cursor CLI binary
   --no-stream           Disable partial output streaming
@@ -90,6 +95,16 @@ Options:
   --whatsapp            Start as a WhatsApp bot (uses Baileys, QR auth)
   -p, --prompt <text>   Run a single prompt and exit
   -h, --help            Show this help
+
+Scheduler commands (CLI, Telegram, WhatsApp):
+  /schedule "prompt" <schedule> [--cloud]   Schedule a recurring job
+  /jobs                                     List all scheduled jobs
+  /cancel <id-prefix>                       Remove a scheduled job
+
+Schedule formats:
+  every <N><s|m|h|d>    e.g., every 30m, every 4h
+  at <ISO8601>          e.g., at 2026-03-01T09:00:00Z
+  cron <5-field>        e.g., cron 0 9 * * 1-5
 
 Environment:
   CURSOR_PATH             Path to cursor CLI binary
@@ -148,8 +163,11 @@ async function main(): Promise<void> {
       cursorConfig: { ...config, cwd: workspace },
     });
 
-    process.once("SIGINT", () => channel.stop());
-    process.once("SIGTERM", () => channel.stop());
+    const scheduler = new Scheduler({ ...config, cwd: workspace });
+    scheduler.start();
+
+    process.once("SIGINT", () => { scheduler.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); channel.stop(); });
 
     await channel.start();
   } else if (whatsapp) {
@@ -184,8 +202,11 @@ async function main(): Promise<void> {
       cursorConfig: { ...config, cwd: workspace },
     });
 
-    process.once("SIGINT", () => channel.stop());
-    process.once("SIGTERM", () => channel.stop());
+    const scheduler = new Scheduler({ ...config, cwd: workspace });
+    scheduler.start();
+
+    process.once("SIGINT", () => { scheduler.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); channel.stop(); });
 
     await channel.start();
   } else if (oneShot) {
@@ -206,7 +227,10 @@ async function main(): Promise<void> {
     await agent.prompt(oneShot);
     closeDatabase();
   } else {
+    const scheduler = new Scheduler(config);
+    scheduler.start();
     await startCli(config);
+    scheduler.stop();
   }
 }
 
