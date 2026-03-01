@@ -1,6 +1,6 @@
 {
   "name": "cureclaw",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Personal AI assistant powered by Cursor CLI with Pi-Mono event-driven patterns",
   "type": "module",
   "main": "dist/index.js",
@@ -14,8 +14,10 @@
     "test": "tsx --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
+    "@slack/bolt": "^3.12.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.8.0",
+    "discord.js": "^14.14.0",
     "grammy": "^1.35.0",
     "pino": "^9.6.0",
     "qrcode-terminal": "^0.12.0"

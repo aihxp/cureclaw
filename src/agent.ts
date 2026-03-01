@@ -197,12 +197,29 @@ export class Agent {
     this._state.messageText = "";
     this._state.pendingToolCalls.clear();
 
+    // System prompt injection from identity
+    let promptText = text;
+    try {
+      const { getSystemPrompt } = await import("./identity/identity.js");
+      const channelType = this.resolvedCwd.startsWith("tg:") ? "telegram"
+        : this.resolvedCwd.startsWith("wa:") ? "whatsapp"
+        : this.resolvedCwd.startsWith("slack:") ? "slack"
+        : this.resolvedCwd.startsWith("discord:") ? "discord"
+        : undefined;
+      const systemPrompt = getSystemPrompt(channelType);
+      if (systemPrompt) {
+        promptText = `[System: ${systemPrompt}]\n\n${text}`;
+      }
+    } catch {
+      // Identity module not available — skip
+    }
+
     const startTime = Date.now();
     let corruptSession = false;
 
     try {
       const stream = agentLoop(
-        text,
+        promptText,
         runConfig,
         this.abortController.signal,
         this.workstation,

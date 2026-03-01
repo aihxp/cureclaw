@@ -17,6 +17,9 @@ import { handleMemoryCommand } from "../memory/commands.js";
 import { handleApprovalCommand } from "../approval/commands.js";
 import { handleBackgroundCommand } from "../background/commands.js";
 import { handleWorkflowCommand } from "../workflow/commands.js";
+import { handleIdentityCommand } from "../identity/commands.js";
+import { handleNotifyCommand } from "../notifications/commands.js";
+import { getGreeting } from "../identity/identity.js";
 import type { BackgroundRunner } from "../background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
@@ -57,8 +60,9 @@ export class TelegramChannel implements Channel {
         await ctx.reply("Access denied.");
         return;
       }
+      const greeting = getGreeting("telegram");
       await ctx.reply(
-        "CureClaw is ready. Send me a prompt and I'll run it through Cursor agent.\n\n" +
+        greeting ?? "CureClaw is ready. Send me a prompt and I'll run it through Cursor agent.\n\n" +
           "Commands:\n/new — Start a fresh session\n/status — Show current session info",
       );
     });
@@ -282,8 +286,9 @@ export class TelegramChannel implements Channel {
 
     this.bot.command("agents", async (ctx) => {
       if (!this.isAllowed(ctx.from?.id)) return;
-      const result = handleAgentCommand("/agents", this.config.workspace);
-      await ctx.reply(result?.text ?? "No subagents found.");
+      const resultOrPromise = handleAgentCommand("/agents", this.config.workspace);
+      const result = resultOrPromise instanceof Promise ? await resultOrPromise : resultOrPromise;
+      await ctx.reply((result as { text: string } | null)?.text ?? "No subagents found.");
     });
 
     this.bot.command("commands", async (ctx) => {
@@ -392,6 +397,25 @@ export class TelegramChannel implements Channel {
       if (resultPromise) {
         const result = await resultPromise;
         await ctx.reply(result.text);
+      }
+    });
+
+    this.bot.command("identity", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleIdentityCommand(`/identity ${args}`);
+      await ctx.reply(result?.text ?? "Usage: /identity help");
+    });
+
+    this.bot.command("notify", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const resultOrPromise = handleNotifyCommand(`/notify ${args}`);
+      if (resultOrPromise) {
+        const result = resultOrPromise instanceof Promise ? await resultOrPromise : resultOrPromise;
+        await ctx.reply((result as { text: string }).text);
+      } else {
+        await ctx.reply("Usage: /notify help");
       }
     });
 

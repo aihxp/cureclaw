@@ -1,6 +1,6 @@
 # CureClaw
 
-General-purpose personal assistant powered by Cursor CLI. Wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API with autonomous steering via follow-ups. Skills scaffolding, MCP server configuration, hooks management, subagent discovery, custom commands, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution. Agent modes (agent/plan/ask), image attachments, webhook receiver. Fleet execution (parallel cloud agents), goal decomposition (planner → workers), and agent run registry. Long-term memory (SQLite-backed /remember, /recall, /forget). Proactive background agents with suggestion system. Approval gates for tool execution control. Curated MCP server presets with /mcp install. Cross-domain workflow engine with conditions and step chaining.
+General-purpose personal assistant powered by Cursor CLI. Wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Five channels for remote access: Telegram, WhatsApp, Slack, and Discord bots plus a CureClaw MCP server (Cursor becomes the dashboard). Agent identity/persona with configurable name, avatar, system prompt, and greeting per channel. Proactive notifications pushed to any channel with delivery logging. Job scheduler with cron/interval/one-shot support. Cloud Agent API with autonomous steering via follow-ups. Enhanced subagent coordination (run, steer, kill, list active). Skills scaffolding, MCP server configuration, hooks management, subagent discovery, custom commands, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution. Agent modes (agent/plan/ask), image attachments, webhook receiver. Fleet execution (parallel cloud agents), goal decomposition (planner → workers), and agent run registry. Long-term memory (SQLite-backed /remember, /recall, /forget). Proactive background agents with suggestion system. Approval gates for tool execution control. Curated MCP server presets with /mcp install. Cross-domain workflow engine with conditions and step chaining.
 
 ## Quick Context
 
@@ -50,6 +50,15 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 | `src/mcp/presets.ts` | Curated MCP server registry (static data + install) |
 | `src/workflow/engine.ts` | Workflow step execution engine |
 | `src/workflow/commands.ts` | /workflow create\|run\|status\|list\|stop\|remove handlers |
+| `src/channels/slack.ts` | Slack bot: @slack/bolt, socket mode + HTTP, one Agent per channel |
+| `src/channels/discord.ts` | Discord bot: discord.js, gateway + intents, one Agent per channel |
+| `src/identity/identity.ts` | Identity CRUD + resolution chain + system prompt/greeting |
+| `src/identity/commands.ts` | /identity set\|show\|list\|remove command handlers |
+| `src/notifications/notify.ts` | Notification dispatch + logging via delivery handlers |
+| `src/notifications/commands.ts` | /notify send\|log command handlers |
+| `src/mcp-server/index.ts` | MCP server entry point (stdin/stdout JSON-RPC) |
+| `src/mcp-server/protocol.ts` | MCP JSON-RPC types |
+| `src/mcp-server/tools.ts` | 8 MCP tool definitions + handlers |
 | `src/cloud/types.ts` | Cloud Agent API request/response types |
 | `src/cloud/client.ts` | CloudClient class (native fetch, Basic auth) |
 | `src/cloud/commands.ts` | /cloud launch\|steer\|status\|stop\|list\|conversation\|models command handlers |
@@ -78,6 +87,11 @@ Telegram Bot →  Agent(chat1) →  agentLoop()  →  spawnCursor()  →  cursor
              →  Agent(chat2) →  ...
 WhatsApp     →  Agent(jid1)  →  agentLoop()  →  spawnCursor()  →  cursor agent [--cloud]
              →  Agent(jid2)  →  ...
+Slack Bot    →  Agent(ch1)   →  agentLoop()  →  spawnCursor()  →  cursor agent [--cloud]
+             →  Agent(ch2)   →  ...
+Discord Bot  →  Agent(ch1)   →  agentLoop()  →  spawnCursor()  →  cursor agent [--cloud]
+             →  Agent(ch2)   →  ...
+MCP Server   →  stdin/stdout JSON-RPC  →  SQLite DB (read-only tools)
 Scheduler    →  Agent(job:N) →  agentLoop()  →  spawnCursor()  →  cursor agent [--cloud]
              →  CloudClient  →  Cloud API    →  api.cursor.com (for cloud+repo jobs)
 Fleet        →  CloudClient  →  Cloud API ×N →  parallel cloud agents (per-task)
@@ -88,14 +102,14 @@ Workstation: spawnCursor() → spawn("ssh", [..., "cd /path && cursor agent ..."
                                                               deliver(target)
 ```
 
-Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (WhatsApp) in shared SQLite DB. Workstation sessions prefixed with `ws:<name>:` for isolation (e.g., `ws:dev:/home/user/project`).
+Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), `wa:<jid>` (WhatsApp), `slack:<channelId>` (Slack), or `discord:<channelId>` (Discord) in shared SQLite DB. Workstation sessions prefixed with `ws:<name>:` for isolation (e.g., `ws:dev:/home/user/project`).
 
 ## Persistence
 
 - **DB location:** `~/.cureclaw/store.db` (override via `CURECLAW_DATA_DIR`)
 - **Session key:** resolved cwd for CLI, `tg:<chatId>` for Telegram, `wa:<jid>` for WhatsApp
-- **Runtime deps:** `better-sqlite3`, `grammy`, `@whiskeysockets/baileys`, `pino`, `qrcode-terminal`
-- Tables: `sessions` (key → chatId), `history` (prompt/result/tokens), `config` (key/value), `jobs` (scheduler), `triggers`, `workstations`, `agent_runs`, `fleets`, `memory`, `background_agents`, `suggestions`, `approval_gates`, `workflows`
+- **Runtime deps:** `better-sqlite3`, `grammy`, `@whiskeysockets/baileys`, `pino`, `qrcode-terminal`, `@slack/bolt`, `discord.js`
+- Tables: `sessions` (key → chatId), `history` (prompt/result/tokens), `config` (key/value), `jobs` (scheduler), `triggers`, `workstations`, `agent_runs`, `fleets`, `memory`, `background_agents`, `suggestions`, `approval_gates`, `workflows`, `identities`, `notification_log`
 
 ## Channels
 
@@ -118,6 +132,31 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Workspace dir: `CURECLAW_WORKSPACE` or `~/.cureclaw/workspace/`
 - One Agent per JID, sessions keyed by `wa:<jid>`
 - Outgoing queue buffers messages during disconnect, flushes on reconnect
+
+### Slack (`--slack`)
+
+- Uses `@slack/bolt` (socket mode or HTTP)
+- Requires `SLACK_BOT_TOKEN` env var
+- Optional `SLACK_APP_TOKEN` for socket mode (no public URL needed)
+- Optional `SLACK_SIGNING_SECRET` for HTTP mode
+- Optional `SLACK_ALLOWED_CHANNELS` (comma-separated channel IDs)
+- One Agent per channel with session key `slack:<channelId>`
+- Threading: all responses go in thread under original message
+- Message limit: split at 3000 chars (Slack limit ~4000)
+- Full command dispatch (same cascade as other channels + identity/notify)
+- Delivery handler registered for scheduler/trigger integration
+
+### Discord (`--discord`)
+
+- Uses `discord.js` with gateway intents
+- Requires `DISCORD_BOT_TOKEN` env var
+- Optional `DISCORD_ALLOWED_CHANNELS` (comma-separated channel IDs)
+- Optional `DISCORD_ALLOWED_GUILDS` (comma-separated guild IDs)
+- One Agent per channel/DM with session key `discord:<channelId>`
+- Threading: long responses (>2000 chars) auto-create a thread
+- Message limit: split at 2000 chars (Discord hard limit)
+- Typing indicator: refresh every 8s (Discord typing lasts ~10s)
+- Bot messages ignored via `message.author.bot` check
 
 ### Workstations (`--workstation`)
 
@@ -198,7 +237,7 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 ### Agent Run Registry
 
 - Tracks every agent execution: fleet workers, orchestration steps, trigger-fired agents, scheduled jobs
-- Five run kinds: `fleet`, `orchestrate`, `trigger`, `job`, `prompt`
+- Six run kinds: `fleet`, `orchestrate`, `trigger`, `job`, `prompt`, `subagent`
 - Commands: `/runs [--active]`, `/run info <id-prefix>`
 - DB table: `agent_runs` with kind, parent_id, cloud_agent_id, status, result, error
 
@@ -294,6 +333,43 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Copies rules, skills, agents, and sanitized MCP config into output dir
 - Generates `plugin.json` manifest in `.cursor-plugin/`
 
+### CureClaw MCP Server (`--mcp-server`)
+
+- Standalone JSON-RPC 2.0 server over stdin/stdout (zero new deps)
+- Exposes CureClaw system state as 8 MCP tools: `cureclaw_status`, `cureclaw_sessions`, `cureclaw_jobs`, `cureclaw_memory`, `cureclaw_agents`, `cureclaw_workflows`, `cureclaw_runs`, `cureclaw_triggers`
+- Self-registration: `/mcp install cureclaw` adds to `.cursor/mcp.json`
+- Reads from same `~/.cureclaw/store.db` database
+- Cursor can query CureClaw state directly via tool calls (acts as a dashboard)
+
+### Agent Identity/Persona
+
+- Configurable name, avatar URL, system prompt, and greeting per channel
+- Resolution chain: channel-specific → global → null (fallback)
+- System prompt injected into every agent prompt as `[System: ...]` prefix
+- Greeting shown on /start or first message
+- Commands: `/identity set <field> <value> [--scope <scope>]`, `/identity show`, `/identity list`, `/identity remove <scope>`
+- Scopes: `global`, `telegram`, `whatsapp`, `slack`, `discord`
+- DB table: `identities` (id, scope, name, avatar_url, system_prompt, greeting)
+
+### Proactive Notifications
+
+- Push messages to any channel without user prompting
+- Uses existing delivery handler system for cross-channel delivery
+- Every notification logged to `notification_log` table (sent/failed)
+- Commands: `/notify <channelType>:<channelId> "message"`, `/notify log [limit]`
+- Background runner automatically notifies on new suggestions
+- Sources: manual, workflow, scheduler, background, trigger
+
+### Enhanced Subagent Coordination
+
+- Run, steer, list, and kill subagents interactively
+- `/agent run <name> [prompt]` — discovers subagent .md file, creates Agent, runs in background
+- `/agent steer <prefix> "follow-up"` — sends follow-up to running subagent
+- `/agent kill <prefix>` — aborts running subagent
+- `/agent list --active` — shows running subagents with status
+- Tracked in agent_runs with kind `"subagent"` via fleet registry
+- Live subagents tracked in module-level Map for prefix-based lookup
+
 ### Steering Queues
 
 - Type while agent is streaming to queue follow-up prompts
@@ -363,4 +439,6 @@ npm run dev -- --whatsapp                         # WhatsApp mode (QR auth)
 
 **v0.11 — Multi-Agent Orchestration:** Fleet execution (parallel cloud agents), goal decomposition (planner → workers), agent run registry (visibility into all agent activity), /fleet launch|status|stop|list, /orchestrate "goal", /runs, /run info. CloudClient.launchAgents() parallel helper.
 
-**v1.0 — General-Purpose Personal Assistant (current):** Long-term memory (SQLite-backed /remember, /recall, /forget + memory context provider). Proactive background agents (periodic subagent execution + suggestion system). Approval gates (pattern-based allow/deny/ask rules for tool execution). Curated MCP presets (/mcp install for 10 community servers). Cross-domain workflows (multi-step engine with prompt/cloud/shell/condition steps, interpolation, conditions).
+**v1.0 — General-Purpose Personal Assistant:** Long-term memory (SQLite-backed /remember, /recall, /forget + memory context provider). Proactive background agents (periodic subagent execution + suggestion system). Approval gates (pattern-based allow/deny/ask rules for tool execution). Curated MCP presets (/mcp install for 10 community servers). Cross-domain workflows (multi-step engine with prompt/cloud/shell/condition steps, interpolation, conditions).
+
+**v1.1 — Full-Blown AI Assistant (current):** Slack channel (@slack/bolt, socket mode + HTTP). Discord channel (discord.js, gateway + intents). CureClaw MCP server (8 tools, stdin/stdout JSON-RPC, self-registration). Agent identity/persona (configurable name, avatar, system prompt, greeting per channel). Proactive notifications (push to any channel, notification log). Enhanced subagent coordination (/agent run, steer, kill, list --active).

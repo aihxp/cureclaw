@@ -25,6 +25,9 @@ import { handleMemoryCommand } from "../memory/commands.js";
 import { handleApprovalCommand } from "../approval/commands.js";
 import { handleBackgroundCommand } from "../background/commands.js";
 import { handleWorkflowCommand } from "../workflow/commands.js";
+import { handleIdentityCommand } from "../identity/commands.js";
+import { handleNotifyCommand } from "../notifications/commands.js";
+import { getGreeting } from "../identity/identity.js";
 import type { BackgroundRunner } from "../background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
@@ -247,9 +250,10 @@ export class WhatsAppChannel implements Channel {
         return;
       }
 
-      const agentResult = handleAgentCommand(text, this.config.workspace);
-      if (agentResult) {
-        await this.sendMessage(jid, agentResult.text);
+      const agentResultOrPromise = handleAgentCommand(text, this.config.workspace);
+      if (agentResultOrPromise) {
+        const agentResult = agentResultOrPromise instanceof Promise ? await agentResultOrPromise : agentResultOrPromise;
+        await this.sendMessage(jid, (agentResult as { text: string }).text);
         return;
       }
 
@@ -268,6 +272,19 @@ export class WhatsAppChannel implements Channel {
       const bgResult = handleBackgroundCommand(text, this.config.backgroundRunner);
       if (bgResult) {
         await this.sendMessage(jid, bgResult.text);
+        return;
+      }
+
+      const identityResult = handleIdentityCommand(text);
+      if (identityResult) {
+        await this.sendMessage(jid, identityResult.text);
+        return;
+      }
+
+      const notifyResultOrPromise = handleNotifyCommand(text);
+      if (notifyResultOrPromise) {
+        const notifyResult = notifyResultOrPromise instanceof Promise ? await notifyResultOrPromise : notifyResultOrPromise;
+        await this.sendMessage(jid, (notifyResult as { text: string }).text);
         return;
       }
 

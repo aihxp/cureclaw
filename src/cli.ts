@@ -19,6 +19,8 @@ import { handleMemoryCommand } from "./memory/commands.js";
 import { handleApprovalCommand } from "./approval/commands.js";
 import { handleBackgroundCommand } from "./background/commands.js";
 import { handleWorkflowCommand } from "./workflow/commands.js";
+import { handleIdentityCommand } from "./identity/commands.js";
+import { handleNotifyCommand } from "./notifications/commands.js";
 import type { BackgroundRunner } from "./background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
@@ -54,7 +56,7 @@ export async function startCli(config: CursorAgentConfig, backgroundRunner?: Bac
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v1.0") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v1.1") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -63,7 +65,7 @@ export async function startCli(config: CursorAgentConfig, backgroundRunner?: Bac
     );
   } else {
     console.log(
-      bold("CureClaw v1.0") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v1.1") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -277,10 +279,34 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
     return;
   }
 
-  // 4b. Agent commands (sync)
-  const agentResult = handleAgentCommand(cmd, workspace);
+  // 4b. Identity commands (sync)
+  const identityResult = handleIdentityCommand(cmd);
+  if (identityResult) {
+    console.log(identityResult.text);
+    return;
+  }
+
+  // 4c. Notification commands (sync or async)
+  const notifyResult = handleNotifyCommand(cmd);
+  if (notifyResult) {
+    if (notifyResult instanceof Promise || (notifyResult && "then" in notifyResult)) {
+      const resolved = await notifyResult;
+      console.log(resolved.text);
+    } else {
+      console.log((notifyResult as { text: string }).text);
+    }
+    return;
+  }
+
+  // 4d. Agent commands (sync or async)
+  const agentResult = handleAgentCommand(cmd, workspace, backgroundRunner, config);
   if (agentResult) {
-    console.log(agentResult.text);
+    if (agentResult instanceof Promise || (agentResult && "then" in agentResult)) {
+      const resolved = await agentResult;
+      console.log(resolved.text);
+    } else {
+      console.log((agentResult as { text: string }).text);
+    }
     return;
   }
 
@@ -396,8 +422,13 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log("  /workflow      Workflow commands (create, run, status, list, stop, remove)");
       console.log("  /workstation   Workstation commands (list, add, remove, default, status)");
       console.log("  /hooks         Hook commands (list, add, remove)");
+      console.log("  /identity      Identity commands (set, show, list, remove)");
+      console.log("  /notify        Send notifications: /notify <channel:id> \"message\"");
       console.log("  /agents        List discovered subagents");
       console.log("  /agent create  Create a subagent: /agent create <name> [--readonly] [--model <m>]");
+      console.log("  /agent run     Run a subagent: /agent run <name> [prompt]");
+      console.log("  /agent steer   Send follow-up: /agent steer <prefix> \"message\"");
+      console.log("  /agent kill    Stop a subagent: /agent kill <prefix>");
       console.log("  /commands      List discovered custom commands");
       console.log("  /run           Run a custom command: /run <name> [context]");
       console.log("  /skill create  Create a new skill: /skill create <name>");

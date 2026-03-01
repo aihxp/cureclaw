@@ -16,6 +16,9 @@ interface ParsedArgs extends CursorAgentConfig {
   newSession?: boolean;
   telegram?: boolean;
   whatsapp?: boolean;
+  slack?: boolean;
+  discord?: boolean;
+  mcpServer?: boolean;
   workstationFlag?: string;
 }
 
@@ -29,6 +32,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     newSession: false,
     telegram: false,
     whatsapp: false,
+    slack: false,
+    discord: false,
+    mcpServer: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -62,6 +68,15 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--whatsapp":
         config.whatsapp = true;
+        break;
+      case "--slack":
+        config.slack = true;
+        break;
+      case "--discord":
+        config.discord = true;
+        break;
+      case "--mcp-server":
+        config.mcpServer = true;
         break;
       case "--cloud":
         config.cloud = true;
@@ -118,13 +133,16 @@ async function startTriggerServer(config: CursorAgentConfig): Promise<{ stop: ()
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v1.0 — General-purpose personal assistant
+  console.log(`CureClaw v1.1 — General-purpose personal assistant
 
 Usage:
   cureclaw [options]              Interactive mode
   cureclaw -p "prompt"            One-shot mode
   cureclaw --telegram             Telegram bot mode
   cureclaw --whatsapp             WhatsApp mode (Baileys)
+  cureclaw --slack                Slack bot mode (socket mode or HTTP)
+  cureclaw --discord              Discord bot mode (gateway)
+  cureclaw --mcp-server           MCP server mode (stdin/stdout JSON-RPC)
 
 Options:
   --model <model>           Model to use (e.g., sonnet-4, gpt-5)
@@ -138,6 +156,9 @@ Options:
   --new                     Start a fresh session (clear saved session for cwd)
   --telegram                Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
   --whatsapp                Start as a WhatsApp bot (uses Baileys, QR auth)
+  --slack                   Start as a Slack bot (requires SLACK_BOT_TOKEN)
+  --discord                 Start as a Discord bot (requires DISCORD_BOT_TOKEN)
+  --mcp-server              Run as MCP server (stdin/stdout JSON-RPC)
   -p, --prompt <text>       Run a single prompt and exit
   -h, --help                Show this help
 
@@ -204,6 +225,20 @@ Hooks commands:
 Subagent commands:
   /agents               List discovered subagents
   /agent create <name>  Scaffold a new subagent
+  /agent run <name>     Run a subagent interactively
+  /agent steer <pfx>    Send follow-up to running subagent
+  /agent kill <pfx>     Stop a running subagent
+  /agent list --active  Show running subagents
+
+Identity commands:
+  /identity set <field> <value> [--scope <scope>]   Set identity field
+  /identity show [--scope <scope>]                  Show identity
+  /identity list                                    List all identities
+  /identity remove <scope>                          Remove identity
+
+Notification commands:
+  /notify <channel:id> "message"   Send notification to a channel
+  /notify log [limit]              Show recent notifications
 
 Custom commands:
   /commands             List discovered commands
@@ -270,11 +305,18 @@ Environment:
   CURECLAW_WEBHOOK_URL    External webhook URL (for tunnels/proxies)
   CURECLAW_WEBHOOK_SECRET HMAC secret for webhook verification (auto-generated)
   CURECLAW_TRIGGER_SECRET Optional shared secret for /trigger/:name endpoint
+  SLACK_BOT_TOKEN         Slack bot token (required for --slack)
+  SLACK_APP_TOKEN         Slack app token for socket mode (optional)
+  SLACK_SIGNING_SECRET    Slack signing secret for HTTP mode (optional)
+  SLACK_ALLOWED_CHANNELS  Comma-separated Slack channel IDs (optional)
+  DISCORD_BOT_TOKEN       Discord bot token (required for --discord)
+  DISCORD_ALLOWED_CHANNELS Comma-separated Discord channel IDs (optional)
+  DISCORD_ALLOWED_GUILDS  Comma-separated Discord guild IDs (optional)
 `);
 }
 
 async function main(): Promise<void> {
-  const { oneShot, newSession, telegram, whatsapp, workstationFlag, ...config } = parseArgs(
+  const { oneShot, newSession, telegram, whatsapp, slack, discord, mcpServer, workstationFlag, ...config } = parseArgs(
     process.argv.slice(2),
   );
 
@@ -381,6 +423,89 @@ async function main(): Promise<void> {
     process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
+  } else if (slack) {
+    const botToken = process.env.SLACK_BOT_TOKEN;
+    if (!botToken) {
+      console.error("Fatal: SLACK_BOT_TOKEN environment variable is required for --slack mode");
+      process.exit(1);
+    }
+
+    const workspace =
+      process.env.CURECLAW_WORKSPACE ??
+      path.join(os.homedir(), ".cureclaw", "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+
+    const allowedChannelsEnv = process.env.SLACK_ALLOWED_CHANNELS;
+    const allowedChannels = allowedChannelsEnv
+      ? new Set(allowedChannelsEnv.split(",").map((s) => s.trim()).filter(Boolean))
+      : undefined;
+
+    const { SlackChannel } = await import("./channels/slack.js");
+    const channel = new SlackChannel({
+      botToken,
+      appToken: process.env.SLACK_APP_TOKEN,
+      signingSecret: process.env.SLACK_SIGNING_SECRET,
+      allowedChannels,
+      workspace,
+      cursorConfig: { ...config, cwd: workspace },
+      backgroundRunner,
+    });
+
+    const scheduler = new Scheduler({ ...config, cwd: workspace });
+    scheduler.start();
+    backgroundRunner.start();
+
+    const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
+
+    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+
+    await channel.start();
+  } else if (discord) {
+    const botToken = process.env.DISCORD_BOT_TOKEN;
+    if (!botToken) {
+      console.error("Fatal: DISCORD_BOT_TOKEN environment variable is required for --discord mode");
+      process.exit(1);
+    }
+
+    const workspace =
+      process.env.CURECLAW_WORKSPACE ??
+      path.join(os.homedir(), ".cureclaw", "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+
+    const allowedChannelsEnv = process.env.DISCORD_ALLOWED_CHANNELS;
+    const allowedChannels = allowedChannelsEnv
+      ? new Set(allowedChannelsEnv.split(",").map((s) => s.trim()).filter(Boolean))
+      : undefined;
+
+    const allowedGuildsEnv = process.env.DISCORD_ALLOWED_GUILDS;
+    const allowedGuilds = allowedGuildsEnv
+      ? new Set(allowedGuildsEnv.split(",").map((s) => s.trim()).filter(Boolean))
+      : undefined;
+
+    const { DiscordChannel } = await import("./channels/discord.js");
+    const channel = new DiscordChannel({
+      botToken,
+      allowedChannels,
+      allowedGuilds,
+      workspace,
+      cursorConfig: { ...config, cwd: workspace },
+      backgroundRunner,
+    });
+
+    const scheduler = new Scheduler({ ...config, cwd: workspace });
+    scheduler.start();
+    backgroundRunner.start();
+
+    const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
+
+    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+
+    await channel.start();
+  } else if (mcpServer) {
+    const { startMcpServer } = await import("./mcp-server/index.js");
+    await startMcpServer();
   } else if (oneShot) {
     // One-shot mode: run a single prompt and exit
     const { Agent } = await import("./agent.js");

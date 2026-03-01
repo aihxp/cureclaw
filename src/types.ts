@@ -312,7 +312,7 @@ export interface Trigger {
 // Agent Run types (tracks all agent executions across the system)
 // ============================================================================
 
-export type AgentRunKind = "fleet" | "orchestrate" | "trigger" | "job" | "prompt";
+export type AgentRunKind = "fleet" | "orchestrate" | "trigger" | "job" | "prompt" | "subagent";
 export type AgentRunStatus = "running" | "success" | "error" | "stopped";
 
 export interface AgentRun {
@@ -460,4 +460,34 @@ export interface Workflow {
   delivery: DeliveryTarget;
   createdAt: string;
   completedAt: string | null;
+}
+
+// ============================================================================
+// Identity types
+// ============================================================================
+
+export interface Identity {
+  id: string;
+  scope: string;              // "global" | "slack" | "discord" | "telegram" | "whatsapp"
+  name: string;
+  avatarUrl: string | null;
+  systemPrompt: string | null;
+  greeting: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ============================================================================
+// Notification types
+// ============================================================================
+
+export interface NotificationLog {
+  id: string;
+  channelType: string;
+  channelId: string;
+  message: string;
+  source: string;             // "manual" | "workflow" | "scheduler" | "background" | "trigger"
+  status: "sent" | "failed";
+  error: string | null;
+  createdAt: string;
 }

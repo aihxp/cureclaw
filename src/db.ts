@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { CursorMode } from "./mode.js";
-import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider, AgentRun, AgentRunKind, AgentRunStatus, Fleet, FleetStatus, Memory, BackgroundAgentRecord, Suggestion, ApprovalGate, ApprovalAction, Workflow, WorkflowStatus, WorkflowStep } from "./types.js";
+import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider, AgentRun, AgentRunKind, AgentRunStatus, Fleet, FleetStatus, Memory, BackgroundAgentRecord, Suggestion, ApprovalGate, ApprovalAction, Workflow, WorkflowStatus, WorkflowStep, Identity, NotificationLog } from "./types.js";
 
 let db: Database.Database;
 
@@ -191,6 +191,29 @@ function createSchema(database: Database.Database): void {
       created_at TEXT NOT NULL,
       completed_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS identities (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      avatar_url TEXT,
+      system_prompt TEXT,
+      greeting TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_log (
+      id TEXT PRIMARY KEY,
+      channel_type TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'manual',
+      status TEXT NOT NULL DEFAULT 'sent',
+      error TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_log_created ON notification_log(created_at);
   `);
 }
 
@@ -1421,4 +1444,134 @@ export function findWorkflowByIdPrefix(prefix: string): Workflow | undefined {
   const rows = db.prepare("SELECT * FROM workflows WHERE id LIKE ?").all(`${prefix}%`) as WorkflowRow[];
   if (rows.length === 1) return workflowRowToWorkflow(rows[0]);
   return undefined;
+}
+
+// --- Identity accessors ---
+
+interface IdentityRow {
+  id: string;
+  scope: string;
+  name: string;
+  avatar_url: string | null;
+  system_prompt: string | null;
+  greeting: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function identityRowToIdentity(row: IdentityRow): Identity {
+  return {
+    id: row.id,
+    scope: row.scope,
+    name: row.name,
+    avatarUrl: row.avatar_url,
+    systemPrompt: row.system_prompt,
+    greeting: row.greeting,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function addIdentity(i: Omit<Identity, "id">): Identity {
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare(
+    `INSERT INTO identities (id, scope, name, avatar_url, system_prompt, greeting, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, i.scope, i.name, i.avatarUrl, i.systemPrompt, i.greeting, i.createdAt, i.updatedAt);
+  return getIdentity(id)!;
+}
+
+export function getIdentity(id: string): Identity | undefined {
+  const row = db.prepare("SELECT * FROM identities WHERE id = ?").get(id) as IdentityRow | undefined;
+  return row ? identityRowToIdentity(row) : undefined;
+}
+
+export function getIdentityByScope(scope: string): Identity | undefined {
+  const row = db.prepare("SELECT * FROM identities WHERE scope = ?").get(scope) as IdentityRow | undefined;
+  return row ? identityRowToIdentity(row) : undefined;
+}
+
+export function getAllIdentities(): Identity[] {
+  const rows = db.prepare("SELECT * FROM identities ORDER BY scope").all() as IdentityRow[];
+  return rows.map(identityRowToIdentity);
+}
+
+export function updateIdentity(
+  id: string,
+  updates: Partial<Pick<Identity, "name" | "avatarUrl" | "systemPrompt" | "greeting" | "updatedAt">>,
+): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.name !== undefined) {
+    sets.push("name = ?");
+    values.push(updates.name);
+  }
+  if (updates.avatarUrl !== undefined) {
+    sets.push("avatar_url = ?");
+    values.push(updates.avatarUrl);
+  }
+  if (updates.systemPrompt !== undefined) {
+    sets.push("system_prompt = ?");
+    values.push(updates.systemPrompt);
+  }
+  if (updates.greeting !== undefined) {
+    sets.push("greeting = ?");
+    values.push(updates.greeting);
+  }
+  if (updates.updatedAt !== undefined) {
+    sets.push("updated_at = ?");
+    values.push(updates.updatedAt);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE identities SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeIdentity(id: string): boolean {
+  const result = db.prepare("DELETE FROM identities WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+// --- Notification Log accessors ---
+
+interface NotificationLogRow {
+  id: string;
+  channel_type: string;
+  channel_id: string;
+  message: string;
+  source: string;
+  status: string;
+  error: string | null;
+  created_at: string;
+}
+
+function notifRowToNotificationLog(row: NotificationLogRow): NotificationLog {
+  return {
+    id: row.id,
+    channelType: row.channel_type,
+    channelId: row.channel_id,
+    message: row.message,
+    source: row.source,
+    status: row.status as NotificationLog["status"],
+    error: row.error,
+    createdAt: row.created_at,
+  };
+}
+
+export function addNotificationLog(n: Omit<NotificationLog, "id">): NotificationLog {
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare(
+    `INSERT INTO notification_log (id, channel_type, channel_id, message, source, status, error, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, n.channelType, n.channelId, n.message, n.source, n.status, n.error, n.createdAt);
+  return { id, ...n };
+}
+
+export function getRecentNotifications(limit = 20): NotificationLog[] {
+  const rows = db.prepare(
+    "SELECT * FROM notification_log ORDER BY created_at DESC LIMIT ?",
+  ).all(limit) as NotificationLogRow[];
+  return rows.map(notifRowToNotificationLog);
 }

@@ -189,5 +189,19 @@ export class BackgroundRunner {
         createdAt: new Date().toISOString(),
       });
     }
+
+    // Proactive notification on new suggestions (best-effort)
+    if (suggestionLines.length > 0) {
+      try {
+        const { notify } = await import("../notifications/notify.js");
+        const { deliver } = await import("../scheduler/delivery.js");
+        // Try to notify all registered delivery handlers
+        const message = `Background agent "${agent.name}" has ${suggestionLines.length} new suggestion(s). Use /background suggest to review.`;
+        // Best-effort: will only work if a channel has registered a delivery handler
+        await deliver({ kind: "store" }, message).catch(() => {});
+      } catch {
+        // Notification module not available — skip
+      }
+    }
   }
 }

@@ -57,13 +57,16 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v1.0 — Cursor ecosystem orchestration platform
+CureClaw v1.1 — Cursor ecosystem orchestration platform
 
 Usage:
   cureclaw [options]              Interactive mode
   cureclaw -p "prompt"            One-shot mode
   cureclaw --telegram             Telegram bot mode
   cureclaw --whatsapp             WhatsApp mode (Baileys)
+  cureclaw --slack                Slack bot mode (@slack/bolt)
+  cureclaw --discord              Discord bot mode (discord.js)
+  cureclaw --mcp-server           MCP server mode (stdin/stdout JSON-RPC)
 
 Options:
   --model <model>           Model to use (e.g., sonnet-4, gpt-5)
@@ -77,6 +80,9 @@ Options:
   --new                     Start a fresh session (clear saved session for cwd)
   --telegram                Start as a Telegram bot (requires TELEGRAM_BOT_TOKEN)
   --whatsapp                Start as a WhatsApp bot (uses Baileys, QR auth)
+  --slack                   Start as a Slack bot (requires SLACK_BOT_TOKEN)
+  --discord                 Start as a Discord bot (requires DISCORD_BOT_TOKEN)
+  --mcp-server              Start as an MCP server (stdin/stdout JSON-RPC)
   -p, --prompt <text>       Run a single prompt and exit
   -h, --help                Show this help
 ```
@@ -106,6 +112,10 @@ Options:
 | `/hooks list\|add\|remove` | Manage Cursor hooks (.cursor/hooks.json) |
 | `/agents` | List discovered subagents |
 | `/agent create <name>` | Scaffold a new subagent (.cursor/agents/) |
+| `/agent run <name> [prompt]` | Run a subagent in the background |
+| `/agent steer <prefix> "msg"` | Send follow-up to a running subagent |
+| `/agent kill <prefix>` | Abort a running subagent |
+| `/agent list --active` | Show running subagents |
 | `/commands` | List discovered custom commands |
 | `/run <name> [args]` | Run a custom command as a prompt |
 | `/skill create <name>` | Scaffold a new skill |
@@ -117,6 +127,9 @@ Options:
 | `/background register\|unregister\|list\|suggest\|status` | Manage background agents |
 | `/approval add\|list\|remove\|enable\|disable` | Manage approval gates |
 | `/workflow create\|run\|status\|list\|stop\|remove` | Manage cross-domain workflows |
+| `/identity set\|show\|list\|remove` | Manage agent identity/persona |
+| `/notify <channel:id> "msg"` | Send proactive notification |
+| `/notify log [limit]` | Show notification history |
 | `/plugin build\|info` | Build or inspect plugin package |
 | `/help` | Show available commands |
 | `/quit` | Exit CureClaw |
@@ -179,6 +192,110 @@ WHATSAPP_BOT_NAME=CureClaw cureclaw --whatsapp
 - Each JID gets its own Agent with independent session continuity (keyed by `wa:<jid>`)
 - DMs always get a response; group messages require the trigger word (if set)
 - Outgoing message queue buffers during disconnects and flushes on reconnect
+
+### Slack Bot
+
+Run CureClaw as a Slack bot using `@slack/bolt`:
+
+```bash
+# Socket mode (recommended — no public URL needed)
+SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... cureclaw --slack
+
+# HTTP mode
+SLACK_BOT_TOKEN=xoxb-... SLACK_SIGNING_SECRET=... cureclaw --slack
+
+# Restrict to specific channels
+SLACK_ALLOWED_CHANNELS=C01234,C56789 cureclaw --slack
+```
+
+- Socket mode if `SLACK_APP_TOKEN` provided, HTTP mode with `SLACK_SIGNING_SECRET` otherwise
+- One Agent per channel with session key `slack:<channelId>`
+- All responses threaded under the original message
+- Full command dispatch (same as CLI + identity/notify)
+- Delivery handler for scheduler/trigger integration
+
+### Discord Bot
+
+Run CureClaw as a Discord bot using `discord.js`:
+
+```bash
+# Start the bot
+DISCORD_BOT_TOKEN=... cureclaw --discord
+
+# Restrict to specific channels or guilds
+DISCORD_ALLOWED_CHANNELS=123456,789012 cureclaw --discord
+DISCORD_ALLOWED_GUILDS=111222 cureclaw --discord
+```
+
+- Gateway intents: Guilds, GuildMessages, DirectMessages, MessageContent
+- One Agent per channel/DM with session key `discord:<channelId>`
+- Long responses (>2000 chars) auto-create a thread
+- Bot messages ignored via `message.author.bot` check
+- Full command dispatch + delivery handler
+
+### CureClaw MCP Server
+
+Expose CureClaw system state as MCP tools — Cursor becomes the dashboard:
+
+```bash
+# Start as MCP server (stdin/stdout JSON-RPC)
+cureclaw --mcp-server
+
+# Self-register with Cursor (adds to .cursor/mcp.json)
+/mcp install cureclaw
+```
+
+8 tools exposed:
+- `cureclaw_status` — Overall system status (version, sessions, jobs, agents, memory count)
+- `cureclaw_sessions` — List sessions or get history
+- `cureclaw_jobs` — List scheduled jobs with status
+- `cureclaw_memory` — Search, list, or add memories
+- `cureclaw_agents` — Background agent status + pending suggestions
+- `cureclaw_workflows` — List workflows with status
+- `cureclaw_runs` — List agent runs (active or recent)
+- `cureclaw_triggers` — List triggers with fire counts
+
+### Agent Identity/Persona
+
+Configure agent name, avatar, system prompt, and greeting per channel:
+
+```bash
+# Set global identity
+/identity set name "CureClaw"
+/identity set greeting "Hello! I'm your personal assistant."
+/identity set prompt "You are a helpful personal assistant specializing in software engineering."
+/identity set avatar "https://example.com/avatar.png"
+
+# Per-channel overrides
+/identity set name "SlackBot" --scope slack
+/identity set greeting "Hey team!" --scope slack
+
+# View identity
+/identity show
+/identity show --scope slack
+/identity list
+
+# Remove a channel override
+/identity remove slack
+```
+
+Resolution chain: channel-specific → global → null. System prompts are injected into every agent prompt. Greetings are shown on `/start` or first message.
+
+### Proactive Notifications
+
+Push messages to any channel without user prompting:
+
+```bash
+# Send a notification
+/notify telegram:123456789 "Deployment complete"
+/notify slack:C01234 "Build failed — check logs"
+
+# View notification history
+/notify log
+/notify log 20
+```
+
+Uses the existing delivery handler system. Every notification logged to the `notification_log` table. Background agents automatically notify on new suggestions.
 
 ### Workstations
 
@@ -515,6 +632,27 @@ Discover and scaffold Cursor subagents (`.cursor/agents/`):
 
 Subagents are `.md` files with YAML frontmatter in `.cursor/agents/` (workspace) or `~/.cursor/agents/` (global). Scaffolded agents include frontmatter with name, description, model, readonly, and is_background fields.
 
+#### Interactive Subagent Coordination
+
+Run, steer, and manage subagents interactively:
+
+```bash
+# Run a subagent in the background
+/agent run reviewer
+/agent run reviewer "Focus on security issues"
+
+# Send a follow-up to a running subagent
+/agent steer rev "Also check for SQL injection"
+
+# List active subagents
+/agent list --active
+
+# Abort a running subagent
+/agent kill rev
+```
+
+Running subagents are tracked in the agent run registry with kind `"subagent"`.
+
 ### Custom Commands
 
 Discover and run custom Cursor commands (`.cursor/commands/`):
@@ -713,13 +851,20 @@ Error handling: failed jobs use exponential backoff (30s, 1m, 5m, 15m, 60m) befo
 | `CURECLAW_WEBHOOK_PORT` | `0` (auto) | Port for webhook HTTP server |
 | `CURECLAW_WEBHOOK_URL` | auto | External webhook URL (for tunnels/proxies) |
 | `CURECLAW_WEBHOOK_SECRET` | auto-generated | HMAC secret for webhook signature verification |
+| `SLACK_BOT_TOKEN` | — | Slack bot token (required for `--slack`) |
+| `SLACK_APP_TOKEN` | — | Slack app token for socket mode |
+| `SLACK_SIGNING_SECRET` | — | Slack signing secret for HTTP mode |
+| `SLACK_ALLOWED_CHANNELS` | allow all | Comma-separated Slack channel IDs |
+| `DISCORD_BOT_TOKEN` | — | Discord bot token (required for `--discord`) |
+| `DISCORD_ALLOWED_CHANNELS` | allow all | Comma-separated Discord channel IDs |
+| `DISCORD_ALLOWED_GUILDS` | allow all | Comma-separated Discord guild IDs |
 | `CURECLAW_TRIGGER_SECRET` | — | Optional shared secret for `/trigger/:name` endpoint |
 
 ## Architecture
 
 ```
 src/
-├── index.ts               Entry point, CLI/Telegram/WhatsApp/one-shot dispatch, DB init
+├── index.ts               Entry point, CLI/Telegram/WhatsApp/Slack/Discord/MCP dispatch, DB init
 ├── cli.ts                 Interactive readline CLI with ANSI rendering + slash commands
 ├── agent.ts               High-level Agent class with DB persistence + sessionKey
 ├── agent-loop.ts          Cursor event → AgentEvent translation layer
@@ -737,7 +882,9 @@ src/
 ├── channels/
 │   ├── channel.ts         Minimal Channel interface (start/stop)
 │   ├── telegram.ts        Telegram bot (grammY, one Agent per chat, photo → image)
-│   └── whatsapp.ts        WhatsApp bot (Baileys, QR auth, one Agent per JID)
+│   ├── whatsapp.ts        WhatsApp bot (Baileys, QR auth, one Agent per JID)
+│   ├── slack.ts           Slack bot (@slack/bolt, socket mode + HTTP, threading)
+│   └── discord.ts         Discord bot (discord.js, gateway + intents, auto-threading)
 ├── scheduler/
 │   ├── parse-schedule.ts       Parse schedule strings (at/every/cron)
 │   ├── compute-next-run.ts     Compute next run time for all schedule kinds
@@ -755,7 +902,7 @@ src/
 ├── agents/
 │   ├── list.ts            .cursor/agents/ discovery (subagent .md files)
 │   ├── scaffold.ts        Subagent scaffolding
-│   └── commands.ts        /agents, /agent create
+│   └── commands.ts        /agents, /agent create|run|steer|kill|list --active
 ├── commands/
 │   ├── list.ts            .cursor/commands/ discovery
 │   └── commands.ts        /commands, /run
@@ -775,10 +922,20 @@ src/
 ├── workflow/
 │   ├── engine.ts          Workflow step execution engine
 │   └── commands.ts        /workflow create|run|status|list|stop|remove
+├── identity/
+│   ├── identity.ts        Identity CRUD + resolution chain + system prompt/greeting
+│   └── commands.ts        /identity set|show|list|remove
+├── notifications/
+│   ├── notify.ts          Notification dispatch + logging via delivery handlers
+│   └── commands.ts        /notify send|log
 ├── mcp/
 │   ├── config.ts          Read/write .cursor/mcp.json
 │   ├── presets.ts          Curated MCP server registry (10 presets)
 │   └── commands.ts        /mcp list|add|remove|install|presets
+├── mcp-server/
+│   ├── index.ts           MCP server entry point (stdin/stdout JSON-RPC)
+│   ├── protocol.ts        MCP JSON-RPC types
+│   └── tools.ts           8 MCP tool definitions + handlers
 ├── fleet/
 │   ├── registry.ts        Agent run tracking (startRun, completeRun, formatting)
 │   ├── fleet.ts           Fleet execution engine (parallel cloud agents)
@@ -800,11 +957,15 @@ src/
 
 ```
 ┌─────────────────────────────────────────────┐
-│  CLI / Telegram / WhatsApp / Your App       │
+│  CLI / Telegram / WhatsApp / Slack /        │
+│  Discord / MCP Server / Your App            │
 │  Subscribes to AgentEvents, renders output  │
 ├──────────────────────┬──────────────────────┤
-│  Memory / Approval   │  Workflows           │
-│  /remember, gates    │  Multi-step engine   │
+│  Identity / Notify   │  Workflows           │
+│  Persona, push msgs  │  Multi-step engine   │
+├──────────────────────┼──────────────────────┤
+│  Memory / Approval   │  MCP Server          │
+│  /remember, gates    │  8 tools, JSON-RPC   │
 ├──────────────────────┼──────────────────────┤
 │  Scheduler           │  Trigger Engine      │
 │  Timer loop, backoff │  Event → match → fire│

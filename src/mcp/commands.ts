@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CommandResult } from "../scheduler/commands.js";
 import { addMcpServer, listMcpServers, removeMcpServer } from "./config.js";
 import { findPreset, listPresets, checkPresetEnv, formatPresetList } from "./presets.js";
@@ -88,6 +90,19 @@ function handleAdd(args: string, workspace: string): CommandResult {
 function handleInstall(presetName: string, workspace: string): CommandResult {
   if (!presetName) {
     return { text: "Usage: /mcp install <name>. Use /mcp presets to see available." };
+  }
+
+  // Special case: cureclaw self-registration
+  if (presetName === "cureclaw") {
+    try {
+      const thisDir = path.dirname(fileURLToPath(import.meta.url));
+      const mcpServerPath = path.resolve(thisDir, "..", "mcp-server", "index.js");
+      addMcpServer(workspace, "cureclaw", { command: "node", args: [mcpServerPath] });
+      return { text: `Installed CureClaw MCP server. Cursor can now use cureclaw_status, cureclaw_memory, etc.` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { text: `Error: ${msg}` };
+    }
   }
 
   const preset = findPreset(presetName);
