@@ -149,6 +149,19 @@ export class Scheduler {
       console.error(`[scheduler] Delivery failed for job ${job.id}:`, err);
     }
 
+    // Fire triggers for job completion
+    try {
+      const { processEvent } = await import("../trigger/engine.js");
+      await processEvent({
+        kind: "job_complete",
+        jobId: job.id,
+        status: success ? "success" : "error",
+        result: (result || error || "").slice(0, 2000),
+      }, this.config);
+    } catch (err) {
+      console.error(`[scheduler] Trigger processing failed for job ${job.id}:`, err);
+    }
+
     console.log(
       `[scheduler] Job ${job.id} ${success ? "completed" : "failed"}${nextRunAt ? `, next run: ${nextRunAt}` : ""}`,
     );

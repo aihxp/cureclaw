@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.9 — Cursor ecosystem orchestration platform
+CureClaw v0.10 — Cursor ecosystem orchestration platform
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -94,6 +94,7 @@ Options:
 | `/schedule "prompt" <schedule>` | Schedule a recurring job (`--reflect`, `--mode`) |
 | `/jobs` | List all scheduled jobs |
 | `/cancel <id-prefix>` | Remove a scheduled job |
+| `/trigger add\|list\|remove\|enable\|disable\|info` | Manage event-driven triggers |
 | `/pipeline "step1" "step2"` | Run multi-step pipeline (`--reflect` per step) |
 | `/workstation list\|add\|remove\|default\|status` | Manage remote workstations |
 | `@name <prompt>` | Run prompt on a specific workstation |
@@ -397,6 +398,48 @@ Package workspace artifacts as a distributable Cursor plugin:
 
 The build process copies rules, skills, agents, and MCP config (with env var sanitization) into a distributable directory with a `plugin.json` manifest.
 
+### Triggers
+
+Event-driven job execution — fire agent jobs in response to webhook POSTs, job completions, or cloud agent status changes:
+
+```bash
+# Webhook trigger — fires when POST /trigger/deploy-review is hit
+/trigger add webhook deploy-review "Review the deploy diff:\n\n{{context.diff}}" --context git_diff
+
+# Job chain — fires when a specific job fails
+/trigger add job-chain abc123 error "Tests failed. Fix:\n\n{{event.result}}" --context git_diff
+
+# Cloud pipeline — fires when any cloud agent finishes
+/trigger add cloud-complete FINISHED "Review the PR changes" --cloud
+
+# Context-rich trigger with multiple providers
+/trigger add webhook morning-report "Summarize:\n\n{{context.log}}\n\n{{context.diff}}" --context git_log:20,git_diff
+
+# List triggers
+/trigger list
+
+# Manage triggers
+/trigger info <id-prefix>
+/trigger disable <id-prefix>
+/trigger enable <id-prefix>
+/trigger remove <id-prefix>
+```
+
+**Context providers** gather runtime data before prompt execution:
+- `git_diff` — `git diff` output (injected as `{{context.diff}}`)
+- `git_log` — recent commit log, optional count (e.g., `git_log:20`)
+- `shell` — run a shell command (e.g., `shell:npm test`)
+- `file` — read a file (e.g., `file:README.md`)
+
+**Event placeholders** inject event data into prompts:
+- `{{event.status}}` — job/cloud completion status
+- `{{event.result}}` — job result text
+- `{{event.payload}}` — webhook POST body (JSON)
+
+**Trigger endpoint:** `POST /trigger/:name` on the webhook server. Cursor hooks can `curl` this endpoint. GitHub/CI webhooks can POST to it. Optional auth via `CURECLAW_TRIGGER_SECRET` header.
+
+**Cycle detection:** Trigger chains are capped at depth 5 to prevent infinite loops (e.g., trigger A → job → trigger B → job → trigger A).
+
 ### Steering & Reflection
 
 Three interconnected features for multi-step workflows:
@@ -480,6 +523,7 @@ Error handling: failed jobs use exponential backoff (30s, 1m, 5m, 15m, 60m) befo
 | `CURECLAW_WEBHOOK_PORT` | `0` (auto) | Port for webhook HTTP server |
 | `CURECLAW_WEBHOOK_URL` | auto | External webhook URL (for tunnels/proxies) |
 | `CURECLAW_WEBHOOK_SECRET` | auto-generated | HMAC secret for webhook signature verification |
+| `CURECLAW_TRIGGER_SECRET` | — | Optional shared secret for `/trigger/:name` endpoint |
 
 ## Architecture
 
@@ -532,8 +576,12 @@ src/
 ├── mcp/
 │   ├── config.ts          Read/write .cursor/mcp.json
 │   └── commands.ts        /mcp list|add|remove
+├── trigger/
+│   ├── context.ts         Context provider execution + prompt template interpolation
+│   ├── engine.ts          Trigger matching, firing, event processing (cycle detection)
+│   └── commands.ts        /trigger add|list|remove|enable|disable|info
 ├── webhook/
-│   └── server.ts          Lightweight HTTP webhook receiver (node:http, HMAC-SHA256)
+│   └── server.ts          Lightweight HTTP webhook receiver + trigger endpoint
 └── plugin/
     ├── manifest.ts        Generate plugin.json manifest
     ├── build.ts           Assemble plugin from workspace artifacts
@@ -547,8 +595,11 @@ src/
 │  CLI / Telegram / WhatsApp / Your App       │
 │  Subscribes to AgentEvents, renders output  │
 ├──────────────────────┬──────────────────────┤
-│  Scheduler           │  Delivery Registry   │
-│  Timer loop, backoff │  Channel handlers    │
+│  Scheduler           │  Trigger Engine      │
+│  Timer loop, backoff │  Event → match → fire│
+├──────────────────────┼──────────────────────┤
+│  Delivery Registry   │  Context Providers   │
+│  Channel handlers    │  git_diff, shell, .. │
 ├──────────────────────┴──────────────────────┤
 │  Agent                                      │
 │  State management, DB persistence, resume   │
@@ -937,11 +988,14 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] **Per-job modes** — `/schedule` with `--mode plan|ask` flag
 
 ### v0.10 — Event-Driven Autonomy
-- [ ] **Hook-driven triggers** — leverage Cursor hooks (`afterFileEdit`, `postToolUse`, `afterShellExecution`) as event sources that spawn follow-up agent jobs or conditional chains
-- [ ] **Cloud webhook chains** — Cloud Agent status webhooks trigger downstream jobs (e.g., "when cloud agent finishes PR, launch review agent")
-- [ ] **Conditional job graphs** — "when job A finishes with status X, run job B" using hooks + scheduler, stored in SQLite
-- [ ] **Context-aware prompts** — auto-inject `.cursor/rules/`, recent git diff, and failing test output into scheduled prompts via Cursor's context system
-- [ ] **Cron + hook hybrids** — scheduler polls on interval, but hooks can trigger immediate runs (e.g., `afterFileEdit` on test files → re-run test suite agent)
+- [x] **Trigger system** — event-driven job execution with three trigger kinds: webhook, job_complete, cloud_complete
+- [x] **Context providers** — gather runtime data (git_diff, git_log, shell, file) before prompt execution
+- [x] **Prompt template interpolation** — `{{context.NAME}}` for context, `{{event.*}}` for event data
+- [x] **Trigger commands** — `/trigger add|list|remove|enable|disable|info` across CLI, Telegram, WhatsApp
+- [x] **Webhook endpoint** — `POST /trigger/:name` with optional shared secret auth
+- [x] **Job chain integration** — scheduler automatically fires `job_complete` triggers after job execution
+- [x] **Cloud chain integration** — webhook server fires `cloud_complete` triggers on status changes
+- [x] **Cycle detection** — max depth 5 prevents infinite trigger chains
 
 ### v0.11 — Multi-Agent Orchestration
 - [ ] **Subagent coordination** — use `.cursor/agents/` subagents as specialized workers (reviewer, planner, fixer) orchestrated by a root agent

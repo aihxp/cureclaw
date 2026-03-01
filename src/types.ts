@@ -267,3 +267,43 @@ export interface Job {
   lastResult: string | null;
   consecutiveErrors: number;
 }
+
+// ============================================================================
+// Trigger types (event-driven job execution)
+// ============================================================================
+
+export type TriggerKind = "webhook" | "job_complete" | "cloud_complete";
+
+export type TriggerCondition =
+  | { kind: "webhook"; name: string }
+  | { kind: "job_complete"; jobId: string; onStatus: "success" | "error" | "any" }
+  | { kind: "cloud_complete"; onStatus: string };
+
+export interface ContextProvider {
+  /** Used as {{context.NAME}} in prompt templates */
+  name: string;
+  kind: "git_diff" | "git_log" | "shell" | "file";
+  /** For git_log: count. For shell: command. For file: path. */
+  arg?: string;
+}
+
+export interface Trigger {
+  id: string;
+  name: string;
+  condition: TriggerCondition;
+  /** Prompt template — may contain {{context.NAME}} and {{event.*}} placeholders */
+  prompt: string;
+  contextProviders: ContextProvider[];
+  delivery: DeliveryTarget;
+  cloud: boolean;
+  repository?: string;
+  reflect: boolean;
+  workstation?: string;
+  mode?: CursorMode;
+  enabled: boolean;
+  createdAt: string;
+  lastFiredAt: string | null;
+  lastStatus: "success" | "error" | null;
+  lastError: string | null;
+  fireCount: number;
+}

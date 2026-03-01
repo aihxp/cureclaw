@@ -18,6 +18,7 @@ import { parseModePrefix } from "../mode.js";
 import { handleSchedulerCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import { handleSkillCommand } from "../skills/commands.js";
+import { handleTriggerCommand } from "../trigger/commands.js";
 import { handleWorkstationCommand } from "../workstation-commands.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
@@ -192,6 +193,12 @@ export class WhatsAppChannel implements Channel {
       const schedResult = handleSchedulerCommand(text, waCtx);
       if (schedResult) {
         await this.sendMessage(jid, schedResult.text);
+        return;
+      }
+
+      const triggerResult = handleTriggerCommand(text, waCtx);
+      if (triggerResult) {
+        await this.sendMessage(jid, triggerResult.text);
         return;
       }
 

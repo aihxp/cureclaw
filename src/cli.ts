@@ -12,6 +12,7 @@ import { isValidMode, parseModePrefix } from "./mode.js";
 import { handlePluginCommand } from "./plugin/commands.js";
 import { handleSchedulerCommand, handlePipelineCommand } from "./scheduler/commands.js";
 import { handleSkillCommand } from "./skills/commands.js";
+import { handleTriggerCommand } from "./trigger/commands.js";
 import { handleWorkstationCommand, testWorkstationConnectivity } from "./workstation-commands.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
@@ -47,7 +48,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.9") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.10") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -56,7 +57,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.9") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.10") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -197,6 +198,13 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
     return;
   }
 
+  // 1a. Trigger commands (sync)
+  const triggerResult = handleTriggerCommand(cmd, ctx);
+  if (triggerResult) {
+    console.log(triggerResult.text);
+    return;
+  }
+
   // 2. Cloud commands (async)
   const cloudResult = handleCloudCommand(cmd, ctx);
   if (cloudResult) {
@@ -330,6 +338,7 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log('  /schedule      Schedule a job: /schedule "prompt" <schedule> [--cloud] [--reflect] [--workstation <name>] [--mode <m>]');
       console.log("  /jobs          List all scheduled jobs");
       console.log("  /cancel        Cancel a job: /cancel <id-prefix>");
+      console.log("  /trigger       Trigger commands (add, list, remove, enable, disable, info)");
       console.log('  /pipeline      Run multi-step pipeline: /pipeline "step1" [--reflect] "step2"');
       console.log("  /cloud         Cloud agent commands (launch, steer, status, stop, list, conversation, models)");
       console.log("  /workstation   Workstation commands (list, add, remove, default, status)");

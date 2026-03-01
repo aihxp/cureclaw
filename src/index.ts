@@ -86,8 +86,39 @@ function parseArgs(argv: string[]): ParsedArgs {
   return config;
 }
 
+async function startTriggerServer(config: CursorAgentConfig): Promise<{ stop: () => Promise<void> } | null> {
+  const portEnv = process.env.CURECLAW_WEBHOOK_PORT;
+  if (!portEnv) return null;
+
+  const { WebhookServer } = await import("./webhook/server.js");
+  const server = new WebhookServer({
+    port: parseInt(portEnv, 10),
+    secret: process.env.CURECLAW_WEBHOOK_SECRET,
+    triggerSecret: process.env.CURECLAW_TRIGGER_SECRET,
+  });
+
+  const { processEvent } = await import("./trigger/engine.js");
+
+  // Trigger webhook: POST /trigger/:name
+  server.subscribeTrigger((event) => {
+    processEvent({ kind: "webhook", name: event.name, payload: event.payload }, config)
+      .catch((err) => console.error(`[trigger] Error processing webhook "${event.name}":`, err));
+  });
+
+  // Cloud status changes → cloud_complete triggers
+  server.subscribe((event) => {
+    processEvent({ kind: "cloud_complete", agentId: event.agentId, status: event.status, summary: event.summary }, config)
+      .catch((err) => console.error(`[trigger] Error processing cloud_complete:`, err));
+  });
+
+  const assignedPort = await server.start();
+  console.log(`[trigger] Server listening on port ${assignedPort}`);
+
+  return { stop: () => server.stop() };
+}
+
 function printUsage(): void {
-  console.log(`CureClaw v0.9 — Cursor ecosystem orchestration platform
+  console.log(`CureClaw v0.10 — Cursor ecosystem orchestration platform
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -142,6 +173,16 @@ Cloud commands:
 Mode commands:
   /mode <agent|plan|ask>  Switch agent mode
 
+Trigger commands:
+  /trigger add webhook <name> "prompt" [--context ...] [--cloud] [--reflect]
+  /trigger add job-chain <id-prefix> <success|error|any> "prompt" [options]
+  /trigger add cloud-complete <status|any> "prompt" [options]
+  /trigger list           List all triggers
+  /trigger remove <id>    Remove a trigger
+  /trigger enable <id>    Enable a trigger
+  /trigger disable <id>   Disable a trigger
+  /trigger info <id>      Show trigger details
+
 Hooks commands:
   /hooks list             List configured hooks
   /hooks add <event> <command> [args]   Add a hook
@@ -186,6 +227,7 @@ Environment:
   CURECLAW_WEBHOOK_PORT   Port for webhook HTTP server (0 = auto-assign)
   CURECLAW_WEBHOOK_URL    External webhook URL (for tunnels/proxies)
   CURECLAW_WEBHOOK_SECRET HMAC secret for webhook verification (auto-generated)
+  CURECLAW_TRIGGER_SECRET Optional shared secret for /trigger/:name endpoint
 `);
 }
 
@@ -242,8 +284,10 @@ async function main(): Promise<void> {
     const scheduler = new Scheduler({ ...config, cwd: workspace });
     scheduler.start();
 
-    process.once("SIGINT", () => { scheduler.stop(); channel.stop(); });
-    process.once("SIGTERM", () => { scheduler.stop(); channel.stop(); });
+    const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
+
+    process.once("SIGINT", () => { scheduler.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
   } else if (whatsapp) {
@@ -281,8 +325,10 @@ async function main(): Promise<void> {
     const scheduler = new Scheduler({ ...config, cwd: workspace });
     scheduler.start();
 
-    process.once("SIGINT", () => { scheduler.stop(); channel.stop(); });
-    process.once("SIGTERM", () => { scheduler.stop(); channel.stop(); });
+    const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
+
+    process.once("SIGINT", () => { scheduler.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
   } else if (oneShot) {
@@ -305,8 +351,12 @@ async function main(): Promise<void> {
   } else {
     const scheduler = new Scheduler(config);
     scheduler.start();
+
+    const triggerServer = await startTriggerServer(config);
+
     await startCli(config);
     scheduler.stop();
+    await triggerServer?.stop();
   }
 }
 

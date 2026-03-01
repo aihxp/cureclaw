@@ -10,6 +10,7 @@ import { parseModePrefix } from "../mode.js";
 import { handleSchedulerCommand, handlePipelineCommand } from "../scheduler/commands.js";
 import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler/delivery.js";
 import { handleSkillCommand } from "../skills/commands.js";
+import { handleTriggerCommand } from "../trigger/commands.js";
 import { handleWorkstationCommand } from "../workstation-commands.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
@@ -220,6 +221,18 @@ export class TelegramChannel implements Channel {
       const args = ctx.match?.toString().trim() ?? "";
       const result = handleHooksCommand(`/hooks ${args}`, this.config.workspace);
       await ctx.reply(result?.text ?? "Usage: /hooks list|add|remove");
+    });
+
+    this.bot.command("trigger", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleTriggerCommand(`/trigger ${args}`, {
+        channelType: "telegram",
+        channelId: String(chatId),
+      });
+      await ctx.reply(result?.text ?? "Usage: /trigger add|list|remove|enable|disable|info");
     });
 
     this.bot.command("agents", async (ctx) => {

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { CursorMode } from "./mode.js";
-import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation } from "./types.js";
+import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider } from "./types.js";
 
 let db: Database.Database;
 
@@ -64,6 +64,31 @@ function createSchema(database: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_jobs_next_run ON jobs(enabled, next_run_at);
+
+    CREATE TABLE IF NOT EXISTS triggers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      condition_kind TEXT NOT NULL,
+      condition_value TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      context_providers TEXT,
+      delivery_kind TEXT NOT NULL,
+      delivery_channel_type TEXT,
+      delivery_channel_id TEXT,
+      cloud INTEGER NOT NULL DEFAULT 0,
+      repository TEXT,
+      reflect INTEGER NOT NULL DEFAULT 0,
+      workstation TEXT,
+      mode TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      last_fired_at TEXT,
+      last_status TEXT,
+      last_error TEXT,
+      fire_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_triggers_condition ON triggers(condition_kind, enabled);
 
     CREATE TABLE IF NOT EXISTS workstations (
       name TEXT PRIMARY KEY,
@@ -478,4 +503,171 @@ export function getDefaultWorkstation(): Workstation | undefined {
 export function setDefaultWorkstation(name: string): void {
   db.prepare("UPDATE workstations SET is_default = 0").run();
   db.prepare("UPDATE workstations SET is_default = 1 WHERE name = ?").run(name);
+}
+
+// --- Trigger accessors ---
+
+interface TriggerRow {
+  id: string;
+  name: string;
+  condition_kind: string;
+  condition_value: string;
+  prompt: string;
+  context_providers: string | null;
+  delivery_kind: string;
+  delivery_channel_type: string | null;
+  delivery_channel_id: string | null;
+  cloud: number;
+  repository: string | null;
+  reflect: number;
+  workstation: string | null;
+  mode: string | null;
+  enabled: number;
+  created_at: string;
+  last_fired_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  fire_count: number;
+}
+
+function triggerRowToTrigger(row: TriggerRow): Trigger {
+  const delivery: DeliveryTarget =
+    row.delivery_kind === "channel" && row.delivery_channel_type && row.delivery_channel_id
+      ? { kind: "channel", channelType: row.delivery_channel_type, channelId: row.delivery_channel_id }
+      : { kind: "store" };
+
+  let condition: TriggerCondition;
+  try {
+    condition = JSON.parse(row.condition_value) as TriggerCondition;
+    condition.kind = row.condition_kind as TriggerCondition["kind"];
+  } catch {
+    condition = { kind: "webhook", name: row.name };
+  }
+
+  let contextProviders: ContextProvider[] = [];
+  if (row.context_providers) {
+    try {
+      contextProviders = JSON.parse(row.context_providers) as ContextProvider[];
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    condition,
+    prompt: row.prompt,
+    contextProviders,
+    delivery,
+    cloud: row.cloud === 1,
+    repository: row.repository ?? undefined,
+    reflect: row.reflect === 1,
+    workstation: row.workstation ?? undefined,
+    mode: (row.mode as CursorMode) ?? undefined,
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+    lastFiredAt: row.last_fired_at,
+    lastStatus: row.last_status as Trigger["lastStatus"],
+    lastError: row.last_error,
+    fireCount: row.fire_count,
+  };
+}
+
+export function addTrigger(
+  t: Omit<Trigger, "id" | "lastFiredAt" | "lastStatus" | "lastError" | "fireCount">,
+): Trigger {
+  const id = crypto.randomUUID().slice(0, 8);
+  const now = new Date().toISOString();
+  const { kind: _kind, ...conditionRest } = t.condition;
+
+  db.prepare(
+    `INSERT INTO triggers (id, name, condition_kind, condition_value, prompt, context_providers, delivery_kind, delivery_channel_type, delivery_channel_id, cloud, repository, reflect, workstation, mode, enabled, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    t.name,
+    t.condition.kind,
+    JSON.stringify(conditionRest),
+    t.prompt,
+    t.contextProviders.length > 0 ? JSON.stringify(t.contextProviders) : null,
+    t.delivery.kind,
+    t.delivery.kind === "channel" ? t.delivery.channelType : null,
+    t.delivery.kind === "channel" ? t.delivery.channelId : null,
+    t.cloud ? 1 : 0,
+    t.repository ?? null,
+    t.reflect ? 1 : 0,
+    t.workstation ?? null,
+    t.mode ?? null,
+    t.enabled ? 1 : 0,
+    now,
+  );
+
+  return getTrigger(id)!;
+}
+
+export function getTrigger(id: string): Trigger | undefined {
+  const row = db.prepare("SELECT * FROM triggers WHERE id = ?").get(id) as TriggerRow | undefined;
+  return row ? triggerRowToTrigger(row) : undefined;
+}
+
+export function getTriggerByName(name: string): Trigger | undefined {
+  const row = db.prepare("SELECT * FROM triggers WHERE name = ?").get(name) as TriggerRow | undefined;
+  return row ? triggerRowToTrigger(row) : undefined;
+}
+
+export function getAllTriggers(): Trigger[] {
+  const rows = db.prepare("SELECT * FROM triggers ORDER BY created_at DESC").all() as TriggerRow[];
+  return rows.map(triggerRowToTrigger);
+}
+
+export function getTriggersByCondition(kind: TriggerKind): Trigger[] {
+  const rows = db.prepare(
+    "SELECT * FROM triggers WHERE condition_kind = ? AND enabled = 1",
+  ).all(kind) as TriggerRow[];
+  return rows.map(triggerRowToTrigger);
+}
+
+export function updateTrigger(
+  id: string,
+  updates: Partial<Pick<Trigger, "enabled" | "lastFiredAt" | "lastStatus" | "lastError" | "fireCount">>,
+): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.enabled !== undefined) {
+    sets.push("enabled = ?");
+    values.push(updates.enabled ? 1 : 0);
+  }
+  if (updates.lastFiredAt !== undefined) {
+    sets.push("last_fired_at = ?");
+    values.push(updates.lastFiredAt);
+  }
+  if (updates.lastStatus !== undefined) {
+    sets.push("last_status = ?");
+    values.push(updates.lastStatus);
+  }
+  if (updates.lastError !== undefined) {
+    sets.push("last_error = ?");
+    values.push(updates.lastError);
+  }
+  if (updates.fireCount !== undefined) {
+    sets.push("fire_count = ?");
+    values.push(updates.fireCount);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE triggers SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeTrigger(id: string): boolean {
+  const result = db.prepare("DELETE FROM triggers WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function findTriggerByIdPrefix(prefix: string): Trigger | undefined {
+  const rows = db.prepare("SELECT * FROM triggers WHERE id LIKE ?").all(`${prefix}%`) as TriggerRow[];
+  if (rows.length === 1) return triggerRowToTrigger(rows[0]);
+  return undefined;
 }

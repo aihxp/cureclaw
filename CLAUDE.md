@@ -34,6 +34,9 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 | `src/mode.ts` | CursorMode type, validation, ?/! prefix parsing |
 | `src/images.ts` | Image attachment types + Cloud API conversion |
 | `src/webhook/server.ts` | Lightweight HTTP webhook receiver (node:http, HMAC-SHA256) |
+| `src/trigger/context.ts` | Context provider execution + prompt template interpolation |
+| `src/trigger/engine.ts` | Trigger matching, firing, event processing (cycle detection) |
+| `src/trigger/commands.ts` | /trigger add\|remove\|list\|enable\|disable\|info command handlers |
 | `src/cloud/types.ts` | Cloud Agent API request/response types |
 | `src/cloud/client.ts` | CloudClient class (native fetch, Basic auth) |
 | `src/cloud/commands.ts` | /cloud launch\|steer\|status\|stop\|list\|conversation\|models command handlers |
@@ -145,6 +148,19 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Receives cloud agent status change events
 - Environment: `CURECLAW_WEBHOOK_PORT`, `CURECLAW_WEBHOOK_URL`, `CURECLAW_WEBHOOK_SECRET`
 
+### Triggers
+
+- Event-driven job execution: webhook POSTs, job completions, cloud agent status changes
+- Three trigger kinds: `webhook`, `job_complete`, `cloud_complete`
+- Context providers gather runtime data before prompt execution: `git_diff`, `git_log`, `shell`, `file`
+- Prompt templates support `{{context.NAME}}` for context and `{{event.status}}`, `{{event.result}}`, `{{event.payload}}` for event data
+- Trigger webhook endpoint: `POST /trigger/:name` (optional `CURECLAW_TRIGGER_SECRET` auth)
+- Cloud status changes automatically fire `cloud_complete` triggers via webhook server
+- Job completions automatically fire `job_complete` triggers via scheduler integration
+- Cycle detection: max depth 5 prevents infinite trigger chains
+- Commands: `/trigger add`, `/trigger list`, `/trigger remove`, `/trigger enable`, `/trigger disable`, `/trigger info`
+- DB table: `triggers` with condition, context providers, delivery, fire count tracking
+
 ### Image Attachments
 
 - Telegram: photo messages downloaded and passed as base64 to agent
@@ -252,9 +268,9 @@ npm run dev -- --whatsapp                         # WhatsApp mode (QR auth)
 
 ## Roadmap Vision
 
-**v0.9 — Cursor Ecosystem Deep Integration (current):** Agent modes (agent/plan/ask), webhook triggers, cloud steering (autonomous follow-ups), hooks management (.cursor/hooks.json), subagent discovery (.cursor/agents/), custom commands (.cursor/commands/), image attachments, scheduler mode flag.
+**v0.9 — Cursor Ecosystem Deep Integration:** Agent modes (agent/plan/ask), webhook triggers, cloud steering (autonomous follow-ups), hooks management (.cursor/hooks.json), subagent discovery (.cursor/agents/), custom commands (.cursor/commands/), image attachments, scheduler mode flag.
 
-**v0.10 — Event-Driven Autonomy:** Hook-driven triggers (Cursor hooks as event sources → agent jobs), cloud webhook chains, conditional job graphs, context-aware prompts (.cursor/rules/ + git diff injection), cron + hook hybrids.
+**v0.10 — Event-Driven Autonomy (current):** Trigger system (webhook, job_complete, cloud_complete), context providers (git_diff, git_log, shell, file), prompt template interpolation ({{context.*}}, {{event.*}}), trigger commands (/trigger add|list|remove|enable|disable|info), webhook endpoint (POST /trigger/:name), scheduler→trigger chaining, cycle detection (max depth 5).
 
 **v0.11 — Multi-Agent Orchestration:** Subagent coordination via .cursor/agents/, cloud agent fleet (parallel Cloud API agents), background agents (is_background flag), goal decomposition via planner subagent, inter-agent context via .cursor/commands/ templates + MCP state.
 
