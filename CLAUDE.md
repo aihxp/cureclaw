@@ -254,6 +254,8 @@ npm run dev -- --whatsapp                         # WhatsApp mode (QR auth)
 
 **v0.9 — Cursor Ecosystem Deep Integration (current):** Agent modes (agent/plan/ask), webhook triggers, cloud steering (autonomous follow-ups), hooks management (.cursor/hooks.json), subagent discovery (.cursor/agents/), custom commands (.cursor/commands/), image attachments, scheduler mode flag.
 
-**v0.10 — Multi-Agent Orchestration:** Planner agent (goal → subtask tree), parallel worker agents, inter-agent messaging (shared DB queue), aggregator, goal decomposition.
+**v0.10 — Event-Driven Autonomy:** Hook-driven triggers (Cursor hooks as event sources → agent jobs), cloud webhook chains, conditional job graphs, context-aware prompts (.cursor/rules/ + git diff injection), cron + hook hybrids.
 
-**v1.0 — General-Purpose Personal Assistant:** Beyond coding — weather, calendar, appointments, email, reminders via MCP. Proactive suggestions, long-term memory (user habits/preferences), approval gates for high-stakes actions, cross-domain tool chaining (deploy + notify on Slack).
+**v0.11 — Multi-Agent Orchestration:** Subagent coordination via .cursor/agents/, cloud agent fleet (parallel Cloud API agents), background agents (is_background flag), goal decomposition via planner subagent, inter-agent context via .cursor/commands/ templates + MCP state.
+
+**v1.0 — General-Purpose Personal Assistant:** MCP tool ecosystem (weather, calendar, email via community MCP servers), proactive background subagents, long-term memory via MCP + SQLite, hook-based approval gates, cross-domain MCP tool chaining (deploy → Slack → Jira).

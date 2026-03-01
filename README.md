@@ -936,19 +936,26 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] **Image attachments** — Telegram photo → base64 → Cloud API passthrough
 - [x] **Per-job modes** — `/schedule` with `--mode plan|ask` flag
 
-### v0.10 — Multi-Agent Orchestration
-- [ ] **Planner agent** — decomposes high-level goals into subtask tree
-- [ ] **Worker agents** — execute subtasks in parallel using existing Agent class
-- [ ] **Inter-agent messaging** — shared DB queue for agent-to-agent communication
-- [ ] **Aggregator** — collects worker results, feeds back to planner for next iteration
-- [ ] **Goal decomposition** — accept "make auth production-ready" → lint → test → fix → verify
+### v0.10 — Event-Driven Autonomy
+- [ ] **Hook-driven triggers** — leverage Cursor hooks (`afterFileEdit`, `postToolUse`, `afterShellExecution`) as event sources that spawn follow-up agent jobs or conditional chains
+- [ ] **Cloud webhook chains** — Cloud Agent status webhooks trigger downstream jobs (e.g., "when cloud agent finishes PR, launch review agent")
+- [ ] **Conditional job graphs** — "when job A finishes with status X, run job B" using hooks + scheduler, stored in SQLite
+- [ ] **Context-aware prompts** — auto-inject `.cursor/rules/`, recent git diff, and failing test output into scheduled prompts via Cursor's context system
+- [ ] **Cron + hook hybrids** — scheduler polls on interval, but hooks can trigger immediate runs (e.g., `afterFileEdit` on test files → re-run test suite agent)
+
+### v0.11 — Multi-Agent Orchestration
+- [ ] **Subagent coordination** — use `.cursor/agents/` subagents as specialized workers (reviewer, planner, fixer) orchestrated by a root agent
+- [ ] **Cloud agent fleet** — launch parallel Cloud Agents via the API, steer independently, aggregate results
+- [ ] **Background agents** — leverage Cursor's `is_background` subagent flag for long-running watchers and monitors
+- [ ] **Goal decomposition** — planner subagent breaks "make auth production-ready" into subtasks, dispatches to worker subagents (lint agent, test agent, fix agent)
+- [ ] **Inter-agent context** — share context between subagents via `.cursor/commands/` templates and MCP server state
 
 ### v1.0 — General-Purpose Personal Assistant
-- [ ] **Beyond coding** — weather, calendar, appointments, email, reminders via MCP servers and tool integrations
-- [ ] **Proactive suggestions** — agent monitors context and proposes actions ("you have a meeting in 30 min, want me to prep notes?")
-- [ ] **Long-term memory** — persistent user preferences, habits, and patterns that inform autonomous decisions
-- [ ] **Approval gates** — draft-and-notify for high-stakes actions (send email, book appointment) with human-in-the-loop confirmation
-- [ ] **Cross-domain tool chaining** — combine coding tools with life tools (e.g., "deploy to staging and notify the team on Slack")
+- [ ] **MCP tool ecosystem** — weather, calendar, email, reminders via community MCP servers (Cursor discovers and manages them natively)
+- [ ] **Proactive agents** — background subagents monitor context via hooks and propose actions ("tests failing since last push — want me to fix?")
+- [ ] **Long-term memory** — persistent user preferences via MCP server backed by SQLite, injected into agent context automatically
+- [ ] **Approval gates** — hook-based confirmation flow for high-stakes actions (send email, deploy, book appointment) with human-in-the-loop via channels
+- [ ] **Cross-domain tool chaining** — MCP servers bridge coding and life tools (e.g., deploy via cloud agent → notify Slack via MCP → update Jira via MCP)
 
 ## License
 
