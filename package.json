@@ -1,6 +1,6 @@
 {
   "name": "cureclaw",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Personal AI assistant powered by Cursor CLI with Pi-Mono event-driven patterns",
   "type": "module",
   "main": "dist/index.js",

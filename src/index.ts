@@ -118,7 +118,7 @@ async function startTriggerServer(config: CursorAgentConfig): Promise<{ stop: ()
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.10 — Cursor ecosystem orchestration platform
+  console.log(`CureClaw v0.11 — Cursor ecosystem orchestration platform
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -172,6 +172,19 @@ Cloud commands:
 
 Mode commands:
   /mode <agent|plan|ask>  Switch agent mode
+
+Fleet commands:
+  /fleet launch <repo> "task1" "task2" ... [--model m] [--pr]
+  /fleet status <id>    Show fleet status
+  /fleet stop <id>      Stop all fleet agents
+  /fleet list           List recent fleets
+
+Orchestration commands:
+  /orchestrate "goal" [--cloud] [--repo <url>] [--model m] [--workers N]
+
+Agent run commands:
+  /runs [--active]      List recent agent runs
+  /run info <id>        Show run details
 
 Trigger commands:
   /trigger add webhook <name> "prompt" [--context ...] [--cloud] [--reflect]

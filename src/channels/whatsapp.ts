@@ -11,6 +11,7 @@ import qrcode from "qrcode-terminal";
 import { Agent } from "../agent.js";
 import { handleAgentCommand } from "../agents/commands.js";
 import { handleCloudCommand } from "../cloud/commands.js";
+import { handleFleetCommand } from "../fleet/commands.js";
 import { handleCommandsCommand } from "../commands/commands.js";
 import { handleHooksCommand } from "../hooks/commands.js";
 import { handleMcpCommand } from "../mcp/commands.js";
@@ -199,6 +200,13 @@ export class WhatsAppChannel implements Channel {
       const triggerResult = handleTriggerCommand(text, waCtx);
       if (triggerResult) {
         await this.sendMessage(jid, triggerResult.text);
+        return;
+      }
+
+      const fleetResult = handleFleetCommand(text, waCtx, this.config.cursorConfig);
+      if (fleetResult) {
+        const result = await fleetResult;
+        await this.sendMessage(jid, result.text);
         return;
       }
 

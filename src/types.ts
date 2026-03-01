@@ -307,3 +307,52 @@ export interface Trigger {
   lastError: string | null;
   fireCount: number;
 }
+
+// ============================================================================
+// Agent Run types (tracks all agent executions across the system)
+// ============================================================================
+
+export type AgentRunKind = "fleet" | "orchestrate" | "trigger" | "job" | "prompt";
+export type AgentRunStatus = "running" | "success" | "error" | "stopped";
+
+export interface AgentRun {
+  id: string;
+  kind: AgentRunKind;
+  parentId: string | null;
+  label: string;
+  cloudAgentId: string | null;
+  status: AgentRunStatus;
+  result: string | null;
+  error: string | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+// ============================================================================
+// Fleet types (parallel cloud agent execution)
+// ============================================================================
+
+export type FleetStatus = "running" | "completed" | "error" | "stopped";
+
+export interface Fleet {
+  id: string;
+  name: string;
+  repository: string;
+  tasks: string[];
+  model: string | null;
+  status: FleetStatus;
+  summary: string | null;
+  delivery: DeliveryTarget;
+  createdAt: string;
+  completedAt: string | null;
+  workerCount: number;
+}
+
+// ============================================================================
+// Goal decomposition types
+// ============================================================================
+
+export interface Subtask {
+  name: string;
+  task: string;
+}

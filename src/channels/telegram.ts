@@ -2,6 +2,7 @@ import { Bot, type Context } from "grammy";
 import { Agent } from "../agent.js";
 import { handleAgentCommand } from "../agents/commands.js";
 import { handleCloudCommand } from "../cloud/commands.js";
+import { handleFleetCommand } from "../fleet/commands.js";
 import { handleCommandsCommand } from "../commands/commands.js";
 import { handleHooksCommand } from "../hooks/commands.js";
 import type { ImageAttachment } from "../images.js";
@@ -233,6 +234,44 @@ export class TelegramChannel implements Channel {
         channelId: String(chatId),
       });
       await ctx.reply(result?.text ?? "Usage: /trigger add|list|remove|enable|disable|info");
+    });
+
+    this.bot.command("fleet", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const fleetCtx = { channelType: "telegram", channelId: String(chatId) };
+      const resultPromise = handleFleetCommand(`/fleet ${args}`, fleetCtx, this.config.cursorConfig);
+      if (resultPromise) {
+        const result = await resultPromise;
+        await ctx.reply(result.text);
+      }
+    });
+
+    this.bot.command("orchestrate", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const orchCtx = { channelType: "telegram", channelId: String(chatId) };
+      const resultPromise = handleFleetCommand(`/orchestrate ${args}`, orchCtx, this.config.cursorConfig);
+      if (resultPromise) {
+        const result = await resultPromise;
+        await ctx.reply(result.text);
+      }
+    });
+
+    this.bot.command("runs", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const runsCtx = { channelType: "telegram", channelId: String(chatId) };
+      const result = handleFleetCommand(`/runs ${args}`, runsCtx);
+      if (result) {
+        await ctx.reply((result as { text: string }).text);
+      }
     });
 
     this.bot.command("agents", async (ctx) => {

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { CursorMode } from "./mode.js";
-import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider } from "./types.js";
+import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider, AgentRun, AgentRunKind, AgentRunStatus, Fleet, FleetStatus } from "./types.js";
 
 let db: Database.Database;
 
@@ -100,6 +100,37 @@ function createSchema(database: Database.Database): void {
       identity_file TEXT,
       is_default INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      parent_id TEXT,
+      label TEXT NOT NULL,
+      cloud_agent_id TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      result TEXT,
+      error TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+
+    CREATE TABLE IF NOT EXISTS fleets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      repository TEXT NOT NULL,
+      tasks TEXT NOT NULL,
+      model TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      summary TEXT,
+      delivery_kind TEXT NOT NULL,
+      delivery_channel_type TEXT,
+      delivery_channel_id TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      worker_count INTEGER NOT NULL
     );
   `);
 }
@@ -669,5 +700,242 @@ export function removeTrigger(id: string): boolean {
 export function findTriggerByIdPrefix(prefix: string): Trigger | undefined {
   const rows = db.prepare("SELECT * FROM triggers WHERE id LIKE ?").all(`${prefix}%`) as TriggerRow[];
   if (rows.length === 1) return triggerRowToTrigger(rows[0]);
+  return undefined;
+}
+
+// --- Agent Run accessors ---
+
+interface AgentRunRow {
+  id: string;
+  kind: string;
+  parent_id: string | null;
+  label: string;
+  cloud_agent_id: string | null;
+  status: string;
+  result: string | null;
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+function agentRunRowToAgentRun(row: AgentRunRow): AgentRun {
+  return {
+    id: row.id,
+    kind: row.kind as AgentRunKind,
+    parentId: row.parent_id,
+    label: row.label,
+    cloudAgentId: row.cloud_agent_id,
+    status: row.status as AgentRunStatus,
+    result: row.result,
+    error: row.error,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+  };
+}
+
+export function addAgentRun(
+  r: Omit<AgentRun, "id" | "completedAt">,
+): AgentRun {
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare(
+    `INSERT INTO agent_runs (id, kind, parent_id, label, cloud_agent_id, status, result, error, started_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    r.kind,
+    r.parentId,
+    r.label,
+    r.cloudAgentId,
+    r.status,
+    r.result,
+    r.error,
+    r.startedAt,
+  );
+  return getAgentRun(id)!;
+}
+
+export function getAgentRun(id: string): AgentRun | undefined {
+  const row = db.prepare("SELECT * FROM agent_runs WHERE id = ?").get(id) as AgentRunRow | undefined;
+  return row ? agentRunRowToAgentRun(row) : undefined;
+}
+
+export function getAgentRunsByParent(parentId: string): AgentRun[] {
+  const rows = db.prepare(
+    "SELECT * FROM agent_runs WHERE parent_id = ? ORDER BY started_at",
+  ).all(parentId) as AgentRunRow[];
+  return rows.map(agentRunRowToAgentRun);
+}
+
+export function getActiveAgentRuns(): AgentRun[] {
+  const rows = db.prepare(
+    "SELECT * FROM agent_runs WHERE status = 'running' ORDER BY started_at DESC",
+  ).all() as AgentRunRow[];
+  return rows.map(agentRunRowToAgentRun);
+}
+
+export function getRecentAgentRuns(limit = 20): AgentRun[] {
+  const rows = db.prepare(
+    "SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT ?",
+  ).all(limit) as AgentRunRow[];
+  return rows.map(agentRunRowToAgentRun);
+}
+
+export function updateAgentRun(
+  id: string,
+  updates: Partial<Pick<AgentRun, "status" | "result" | "error" | "completedAt">>,
+): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status !== undefined) {
+    sets.push("status = ?");
+    values.push(updates.status);
+  }
+  if (updates.result !== undefined) {
+    sets.push("result = ?");
+    values.push(updates.result);
+  }
+  if (updates.error !== undefined) {
+    sets.push("error = ?");
+    values.push(updates.error);
+  }
+  if (updates.completedAt !== undefined) {
+    sets.push("completed_at = ?");
+    values.push(updates.completedAt);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE agent_runs SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function findAgentRunByIdPrefix(prefix: string): AgentRun | undefined {
+  const rows = db.prepare("SELECT * FROM agent_runs WHERE id LIKE ?").all(`${prefix}%`) as AgentRunRow[];
+  if (rows.length === 1) return agentRunRowToAgentRun(rows[0]);
+  return undefined;
+}
+
+// --- Fleet accessors ---
+
+interface FleetRow {
+  id: string;
+  name: string;
+  repository: string;
+  tasks: string;
+  model: string | null;
+  status: string;
+  summary: string | null;
+  delivery_kind: string;
+  delivery_channel_type: string | null;
+  delivery_channel_id: string | null;
+  created_at: string;
+  completed_at: string | null;
+  worker_count: number;
+}
+
+function fleetRowToFleet(row: FleetRow): Fleet {
+  const delivery: DeliveryTarget =
+    row.delivery_kind === "channel" && row.delivery_channel_type && row.delivery_channel_id
+      ? { kind: "channel", channelType: row.delivery_channel_type, channelId: row.delivery_channel_id }
+      : { kind: "store" };
+
+  let tasks: string[] = [];
+  try {
+    tasks = JSON.parse(row.tasks) as string[];
+  } catch {
+    // Ignore invalid JSON
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    repository: row.repository,
+    tasks,
+    model: row.model,
+    status: row.status as FleetStatus,
+    summary: row.summary,
+    delivery,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+    workerCount: row.worker_count,
+  };
+}
+
+export function addFleet(
+  f: Omit<Fleet, "id" | "completedAt" | "summary">,
+): Fleet {
+  const id = crypto.randomUUID().slice(0, 8);
+  const now = new Date().toISOString();
+
+  db.prepare(
+    `INSERT INTO fleets (id, name, repository, tasks, model, status, delivery_kind, delivery_channel_type, delivery_channel_id, created_at, worker_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    f.name,
+    f.repository,
+    JSON.stringify(f.tasks),
+    f.model,
+    f.status,
+    f.delivery.kind,
+    f.delivery.kind === "channel" ? f.delivery.channelType : null,
+    f.delivery.kind === "channel" ? f.delivery.channelId : null,
+    now,
+    f.workerCount,
+  );
+
+  return getFleet(id)!;
+}
+
+export function getFleet(id: string): Fleet | undefined {
+  const row = db.prepare("SELECT * FROM fleets WHERE id = ?").get(id) as FleetRow | undefined;
+  return row ? fleetRowToFleet(row) : undefined;
+}
+
+export function getAllFleets(): Fleet[] {
+  const rows = db.prepare("SELECT * FROM fleets ORDER BY created_at DESC").all() as FleetRow[];
+  return rows.map(fleetRowToFleet);
+}
+
+export function getActiveFleets(): Fleet[] {
+  const rows = db.prepare(
+    "SELECT * FROM fleets WHERE status = 'running' ORDER BY created_at DESC",
+  ).all() as FleetRow[];
+  return rows.map(fleetRowToFleet);
+}
+
+export function updateFleet(
+  id: string,
+  updates: Partial<Pick<Fleet, "status" | "summary" | "completedAt">>,
+): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status !== undefined) {
+    sets.push("status = ?");
+    values.push(updates.status);
+  }
+  if (updates.summary !== undefined) {
+    sets.push("summary = ?");
+    values.push(updates.summary);
+  }
+  if (updates.completedAt !== undefined) {
+    sets.push("completed_at = ?");
+    values.push(updates.completedAt);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE fleets SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeFleet(id: string): boolean {
+  const result = db.prepare("DELETE FROM fleets WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function findFleetByIdPrefix(prefix: string): Fleet | undefined {
+  const rows = db.prepare("SELECT * FROM fleets WHERE id LIKE ?").all(`${prefix}%`) as FleetRow[];
+  if (rows.length === 1) return fleetRowToFleet(rows[0]);
   return undefined;
 }

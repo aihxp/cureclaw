@@ -1,4 +1,5 @@
 import type {
+  CloudAgent,
   CloudApiError,
   CloudPrompt,
   DeleteAgentResponse,
@@ -73,6 +74,25 @@ export class CloudClient {
 
   async me(): Promise<MeResponse> {
     return this.request<MeResponse>("GET", "/v1/me");
+  }
+
+  /** Launch multiple cloud agents in parallel. Returns results with errors captured per-agent. */
+  async launchAgents(
+    requests: LaunchAgentRequest[],
+  ): Promise<Array<{ request: LaunchAgentRequest; agent?: CloudAgent; error?: string }>> {
+    const results = await Promise.allSettled(
+      requests.map((req) => this.launchAgent(req)),
+    );
+
+    return results.map((result, i) => {
+      if (result.status === "fulfilled") {
+        return { request: requests[i], agent: result.value };
+      }
+      return {
+        request: requests[i],
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      };
+    });
   }
 
   async pollUntilDone(

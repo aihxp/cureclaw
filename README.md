@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.10 — Cursor ecosystem orchestration platform
+CureClaw v0.11 — Cursor ecosystem orchestration platform
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -99,6 +99,10 @@ Options:
 | `/workstation list\|add\|remove\|default\|status` | Manage remote workstations |
 | `@name <prompt>` | Run prompt on a specific workstation |
 | `/cloud <subcommand>` | Cloud agent commands (launch, steer, status, stop, list, conversation, models) |
+| `/fleet launch\|status\|stop\|list` | Fleet commands (parallel cloud agents) |
+| `/orchestrate "goal" [--cloud --repo <url>]` | Decompose goal and dispatch workers |
+| `/runs [--active]` | List agent runs |
+| `/run info <id-prefix>` | Show run details |
 | `/hooks list\|add\|remove` | Manage Cursor hooks (.cursor/hooks.json) |
 | `/agents` | List discovered subagents |
 | `/agent create <name>` | Scaffold a new subagent (.cursor/agents/) |
@@ -259,6 +263,60 @@ Autonomously steer a cloud agent via follow-up prompts until it reaches a satisf
 ```
 
 Cloud steering launches a cloud agent and automatically sends follow-up prompts when the agent's output doesn't pass the evaluator (default: LGTM detection). It stops when the evaluator is satisfied or the max follow-up count is reached (default: 5).
+
+### Fleet Execution
+
+Launch multiple cloud agents in parallel on the same repository with different tasks:
+
+```bash
+# Launch 3 agents in parallel
+/fleet launch https://github.com/user/repo "fix auth bugs" "add validation" "write tests"
+
+# Check fleet status
+/fleet status a3f2
+
+# Stop all agents in a fleet
+/fleet stop a3f2
+
+# List recent fleets
+/fleet list
+```
+
+Each agent runs independently. Results are aggregated into a summary when all agents complete. Individual agent failures don't stop the fleet.
+
+### Orchestration
+
+Decompose a high-level goal into subtasks and dispatch workers:
+
+```bash
+# Local execution: planner → sequential workers
+/orchestrate "make the auth module production-ready"
+
+# Cloud execution: planner → parallel fleet
+/orchestrate "refactor the payment system" --cloud --repo https://github.com/user/repo
+
+# With specific model and worker count
+/orchestrate "optimize database queries" --cloud --repo https://github.com/user/repo --model sonnet-4 --workers 5
+```
+
+The planner agent decomposes the goal into independent subtasks. With `--cloud`, subtasks run as a parallel fleet. Without, they execute sequentially via local agents.
+
+### Agent Run Registry
+
+Track all agent executions across the system:
+
+```bash
+# List recent runs
+/runs
+
+# List only active runs
+/runs --active
+
+# Show run details
+/run info a3f2
+```
+
+Runs are tracked for fleet workers, orchestration steps, trigger-fired agents, and scheduled jobs.
 
 ### Agent Modes
 
@@ -576,6 +634,11 @@ src/
 ├── mcp/
 │   ├── config.ts          Read/write .cursor/mcp.json
 │   └── commands.ts        /mcp list|add|remove
+├── fleet/
+│   ├── registry.ts        Agent run tracking (startRun, completeRun, formatting)
+│   ├── fleet.ts           Fleet execution engine (parallel cloud agents)
+│   ├── decompose.ts       Goal decomposition (planner prompt, subtask parsing)
+│   └── commands.ts        /fleet, /orchestrate, /runs, /run info command handlers
 ├── trigger/
 │   ├── context.ts         Context provider execution + prompt template interpolation
 │   ├── engine.ts          Trigger matching, firing, event processing (cycle detection)
@@ -597,6 +660,9 @@ src/
 ├──────────────────────┬──────────────────────┤
 │  Scheduler           │  Trigger Engine      │
 │  Timer loop, backoff │  Event → match → fire│
+├──────────────────────┼──────────────────────┤
+│  Fleet / Orchestrate │  Agent Run Registry  │
+│  Parallel cloud, decompose │ Track all runs│
 ├──────────────────────┼──────────────────────┤
 │  Delivery Registry   │  Context Providers   │
 │  Channel handlers    │  git_diff, shell, .. │
@@ -998,11 +1064,12 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] **Cycle detection** — max depth 5 prevents infinite trigger chains
 
 ### v0.11 — Multi-Agent Orchestration
-- [ ] **Subagent coordination** — use `.cursor/agents/` subagents as specialized workers (reviewer, planner, fixer) orchestrated by a root agent
-- [ ] **Cloud agent fleet** — launch parallel Cloud Agents via the API, steer independently, aggregate results
-- [ ] **Background agents** — leverage Cursor's `is_background` subagent flag for long-running watchers and monitors
-- [ ] **Goal decomposition** — planner subagent breaks "make auth production-ready" into subtasks, dispatches to worker subagents (lint agent, test agent, fix agent)
-- [ ] **Inter-agent context** — share context between subagents via `.cursor/commands/` templates and MCP server state
+- [x] **Fleet execution** — launch parallel cloud agents on the same repo with `/fleet launch`, monitor progress, stop all with `/fleet stop`
+- [x] **Goal decomposition** — `/orchestrate "goal"` runs a planner agent, decomposes into subtasks, dispatches workers (local sequential or cloud fleet)
+- [x] **Agent run registry** — track all agent executions (fleet, orchestrate, trigger, job, prompt) with `/runs` and `/run info`
+- [x] **CloudClient.launchAgents()** — parallel launch helper via `Promise.allSettled`
+- [x] **DB tables** — `agent_runs` and `fleets` for persistent tracking
+- [x] **Cross-channel support** — fleet/orchestrate/runs commands in CLI, Telegram, WhatsApp
 
 ### v1.0 — General-Purpose Personal Assistant
 - [ ] **MCP tool ecosystem** — weather, calendar, email, reminders via community MCP servers (Cursor discovers and manages them natively)

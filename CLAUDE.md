@@ -1,6 +1,6 @@
 # CureClaw
 
-Cursor ecosystem orchestration platform. Wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API with autonomous steering via follow-ups. Skills scaffolding, MCP server configuration, hooks management, subagent discovery, custom commands, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution. Agent modes (agent/plan/ask), image attachments, webhook receiver.
+Cursor ecosystem orchestration platform. Wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API with autonomous steering via follow-ups. Skills scaffolding, MCP server configuration, hooks management, subagent discovery, custom commands, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution. Agent modes (agent/plan/ask), image attachments, webhook receiver. Fleet execution (parallel cloud agents), goal decomposition (planner → workers), and agent run registry (visibility into all agent activity).
 
 ## Quick Context
 
@@ -37,6 +37,10 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 | `src/trigger/context.ts` | Context provider execution + prompt template interpolation |
 | `src/trigger/engine.ts` | Trigger matching, firing, event processing (cycle detection) |
 | `src/trigger/commands.ts` | /trigger add\|remove\|list\|enable\|disable\|info command handlers |
+| `src/fleet/registry.ts` | Agent run tracking (startRun, completeRun, formatting) |
+| `src/fleet/fleet.ts` | Fleet execution engine (parallel cloud agents, monitor, stop) |
+| `src/fleet/decompose.ts` | Goal decomposition (planner prompt, subtask parsing) |
+| `src/fleet/commands.ts` | /fleet, /orchestrate, /runs, /run info command handlers |
 | `src/cloud/types.ts` | Cloud Agent API request/response types |
 | `src/cloud/client.ts` | CloudClient class (native fetch, Basic auth) |
 | `src/cloud/commands.ts` | /cloud launch\|steer\|status\|stop\|list\|conversation\|models command handlers |
@@ -67,6 +71,8 @@ WhatsApp     →  Agent(jid1)  →  agentLoop()  →  spawnCursor()  →  cursor
              →  Agent(jid2)  →  ...
 Scheduler    →  Agent(job:N) →  agentLoop()  →  spawnCursor()  →  cursor agent [--cloud]
              →  CloudClient  →  Cloud API    →  api.cursor.com (for cloud+repo jobs)
+Fleet        →  CloudClient  →  Cloud API ×N →  parallel cloud agents (per-task)
+Orchestrate  →  Agent(plan)  →  decompose    →  Fleet or sequential Agent workers
 
 Workstation: spawnCursor() → spawn("ssh", [..., "cd /path && cursor agent ..."]) → remote NDJSON
                                                                      ↓
@@ -80,7 +86,7 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - **DB location:** `~/.cureclaw/store.db` (override via `CURECLAW_DATA_DIR`)
 - **Session key:** resolved cwd for CLI, `tg:<chatId>` for Telegram, `wa:<jid>` for WhatsApp
 - **Runtime deps:** `better-sqlite3`, `grammy`, `@whiskeysockets/baileys`, `pino`, `qrcode-terminal`
-- Tables: `sessions` (key → chatId), `history` (prompt/result/tokens), `config` (key/value), `jobs` (scheduler)
+- Tables: `sessions` (key → chatId), `history` (prompt/result/tokens), `config` (key/value), `jobs` (scheduler), `triggers`, `workstations`, `agent_runs`, `fleets`
 
 ## Channels
 
@@ -160,6 +166,32 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Cycle detection: max depth 5 prevents infinite trigger chains
 - Commands: `/trigger add`, `/trigger list`, `/trigger remove`, `/trigger enable`, `/trigger disable`, `/trigger info`
 - DB table: `triggers` with condition, context providers, delivery, fire count tracking
+
+### Fleet
+
+- Launches multiple cloud agents in parallel on the same repository with different tasks
+- Each agent runs independently; results are aggregated into a summary
+- Commands: `/fleet launch <repo> "task1" "task2" ...`, `/fleet status <id>`, `/fleet stop <id>`, `/fleet list`
+- Uses `CloudClient.launchAgents()` for parallel launch via `Promise.allSettled`
+- Fleet monitoring polls all agents concurrently, updates agent runs as they complete
+- DB tables: `fleets` (fleet records) + `agent_runs` (per-worker tracking)
+- Fleet status: "completed" if any agent succeeded, "error" if all failed
+
+### Orchestration
+
+- Takes a high-level goal, runs a planner agent to decompose into subtasks, dispatches workers
+- `/orchestrate "goal" [--cloud] [--repo <url>] [--model m] [--workers N]`
+- Planner prompt instructs agent to output JSON array of `{name, task}` subtasks
+- With `--cloud --repo`: launches a cloud fleet with the subtasks
+- Without `--cloud`: executes subtasks sequentially via local Agent
+- `parseSubtasks()` handles JSON extraction from markdown fences and surrounding text
+
+### Agent Run Registry
+
+- Tracks every agent execution: fleet workers, orchestration steps, trigger-fired agents, scheduled jobs
+- Five run kinds: `fleet`, `orchestrate`, `trigger`, `job`, `prompt`
+- Commands: `/runs [--active]`, `/run info <id-prefix>`
+- DB table: `agent_runs` with kind, parent_id, cloud_agent_id, status, result, error
 
 ### Image Attachments
 
@@ -270,8 +302,8 @@ npm run dev -- --whatsapp                         # WhatsApp mode (QR auth)
 
 **v0.9 — Cursor Ecosystem Deep Integration:** Agent modes (agent/plan/ask), webhook triggers, cloud steering (autonomous follow-ups), hooks management (.cursor/hooks.json), subagent discovery (.cursor/agents/), custom commands (.cursor/commands/), image attachments, scheduler mode flag.
 
-**v0.10 — Event-Driven Autonomy (current):** Trigger system (webhook, job_complete, cloud_complete), context providers (git_diff, git_log, shell, file), prompt template interpolation ({{context.*}}, {{event.*}}), trigger commands (/trigger add|list|remove|enable|disable|info), webhook endpoint (POST /trigger/:name), scheduler→trigger chaining, cycle detection (max depth 5).
+**v0.10 — Event-Driven Autonomy:** Trigger system (webhook, job_complete, cloud_complete), context providers (git_diff, git_log, shell, file), prompt template interpolation ({{context.*}}, {{event.*}}), trigger commands (/trigger add|list|remove|enable|disable|info), webhook endpoint (POST /trigger/:name), scheduler→trigger chaining, cycle detection (max depth 5).
 
-**v0.11 — Multi-Agent Orchestration:** Subagent coordination via .cursor/agents/, cloud agent fleet (parallel Cloud API agents), background agents (is_background flag), goal decomposition via planner subagent, inter-agent context via .cursor/commands/ templates + MCP state.
+**v0.11 — Multi-Agent Orchestration (current):** Fleet execution (parallel cloud agents), goal decomposition (planner → workers), agent run registry (visibility into all agent activity), /fleet launch|status|stop|list, /orchestrate "goal", /runs, /run info. CloudClient.launchAgents() parallel helper.
 
 **v1.0 — General-Purpose Personal Assistant:** MCP tool ecosystem (weather, calendar, email via community MCP servers), proactive background subagents, long-term memory via MCP + SQLite, hook-based approval gates, cross-domain MCP tool chaining (deploy → Slack → Jira).

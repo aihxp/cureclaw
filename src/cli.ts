@@ -4,6 +4,7 @@ import * as readline from "node:readline";
 import { Agent } from "./agent.js";
 import { handleAgentCommand } from "./agents/commands.js";
 import { handleCloudCommand } from "./cloud/commands.js";
+import { handleFleetCommand } from "./fleet/commands.js";
 import { handleCommandsCommand } from "./commands/commands.js";
 import { getSession, getAllSessions, getHistory } from "./db.js";
 import { handleHooksCommand } from "./hooks/commands.js";
@@ -48,7 +49,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.10") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.11") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -57,7 +58,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.10") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v0.11") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -205,6 +206,14 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
     return;
   }
 
+  // 1b. Fleet/orchestrate/runs commands (sync or async)
+  const fleetResult = handleFleetCommand(cmd, ctx, config);
+  if (fleetResult) {
+    const result = await fleetResult;
+    console.log(result.text);
+    return;
+  }
+
   // 2. Cloud commands (async)
   const cloudResult = handleCloudCommand(cmd, ctx);
   if (cloudResult) {
@@ -341,6 +350,10 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log("  /trigger       Trigger commands (add, list, remove, enable, disable, info)");
       console.log('  /pipeline      Run multi-step pipeline: /pipeline "step1" [--reflect] "step2"');
       console.log("  /cloud         Cloud agent commands (launch, steer, status, stop, list, conversation, models)");
+      console.log("  /fleet         Fleet commands (launch, status, stop, list) — parallel cloud agents");
+      console.log('  /orchestrate   Decompose a goal and dispatch workers: /orchestrate "goal" [--cloud --repo <url>]');
+      console.log("  /runs          List agent runs: /runs [--active]");
+      console.log("  /run info      Show run details: /run info <id-prefix>");
       console.log("  /workstation   Workstation commands (list, add, remove, default, status)");
       console.log("  /hooks         Hook commands (list, add, remove)");
       console.log("  /agents        List discovered subagents");
