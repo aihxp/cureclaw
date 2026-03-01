@@ -1,6 +1,6 @@
 # CureClaw
 
-Cursor ecosystem orchestration platform. Wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API with autonomous steering via follow-ups. Skills scaffolding, MCP server configuration, hooks management, subagent discovery, custom commands, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution. Agent modes (agent/plan/ask), image attachments, webhook receiver. Fleet execution (parallel cloud agents), goal decomposition (planner → workers), and agent run registry (visibility into all agent activity).
+General-purpose personal assistant powered by Cursor CLI. Wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Telegram and WhatsApp channels for remote access. Job scheduler with cron/interval/one-shot support. Cloud Agent API with autonomous steering via follow-ups. Skills scaffolding, MCP server configuration, hooks management, subagent discovery, custom commands, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution. Agent modes (agent/plan/ask), image attachments, webhook receiver. Fleet execution (parallel cloud agents), goal decomposition (planner → workers), and agent run registry. Long-term memory (SQLite-backed /remember, /recall, /forget). Proactive background agents with suggestion system. Approval gates for tool execution control. Curated MCP server presets with /mcp install. Cross-domain workflow engine with conditions and step chaining.
 
 ## Quick Context
 
@@ -41,6 +41,15 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 | `src/fleet/fleet.ts` | Fleet execution engine (parallel cloud agents, monitor, stop) |
 | `src/fleet/decompose.ts` | Goal decomposition (planner prompt, subtask parsing) |
 | `src/fleet/commands.ts` | /fleet, /orchestrate, /runs, /run info command handlers |
+| `src/memory/memory.ts` | Long-term memory CRUD + search + context builder |
+| `src/memory/commands.ts` | /remember, /recall, /forget command handlers |
+| `src/background/runner.ts` | BackgroundRunner class (periodic scan + agent dispatch) |
+| `src/background/commands.ts` | /background register\|unregister\|list\|suggest\|status handlers |
+| `src/approval/gates.ts` | Gate matching, approval check logic |
+| `src/approval/commands.ts` | /approval add\|list\|remove\|enable\|disable handlers |
+| `src/mcp/presets.ts` | Curated MCP server registry (static data + install) |
+| `src/workflow/engine.ts` | Workflow step execution engine |
+| `src/workflow/commands.ts` | /workflow create\|run\|status\|list\|stop\|remove handlers |
 | `src/cloud/types.ts` | Cloud Agent API request/response types |
 | `src/cloud/client.ts` | CloudClient class (native fetch, Basic auth) |
 | `src/cloud/commands.ts` | /cloud launch\|steer\|status\|stop\|list\|conversation\|models command handlers |
@@ -86,7 +95,7 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - **DB location:** `~/.cureclaw/store.db` (override via `CURECLAW_DATA_DIR`)
 - **Session key:** resolved cwd for CLI, `tg:<chatId>` for Telegram, `wa:<jid>` for WhatsApp
 - **Runtime deps:** `better-sqlite3`, `grammy`, `@whiskeysockets/baileys`, `pino`, `qrcode-terminal`
-- Tables: `sessions` (key → chatId), `history` (prompt/result/tokens), `config` (key/value), `jobs` (scheduler), `triggers`, `workstations`, `agent_runs`, `fleets`
+- Tables: `sessions` (key → chatId), `history` (prompt/result/tokens), `config` (key/value), `jobs` (scheduler), `triggers`, `workstations`, `agent_runs`, `fleets`, `memory`, `background_agents`, `suggestions`, `approval_gates`, `workflows`
 
 ## Channels
 
@@ -192,6 +201,54 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), or `wa:<jid>` (
 - Five run kinds: `fleet`, `orchestrate`, `trigger`, `job`, `prompt`
 - Commands: `/runs [--active]`, `/run info <id-prefix>`
 - DB table: `agent_runs` with kind, parent_id, cloud_agent_id, status, result, error
+
+### Long-Term Memory
+
+- SQLite-backed persistent memory with key-value storage, tags, and full-text search
+- Commands: `/remember <key> <content> [--tags tag1,tag2]`, `/recall [query]`, `/forget <key>`, `/memory help`
+- `remember()` upserts by key — creates new or updates existing memory
+- `recall(query)` searches across key, content, and tags via SQL LIKE
+- `buildMemoryContext(query)` generates a context block from top 5 matching memories for injection into prompts
+- Memory context provider: triggers can use `--context memory:query` to inject relevant memories via `{{context.memories}}`
+- DB table: `memory` (id, key, content, tags JSON, source, created_at, updated_at)
+
+### Background Agents
+
+- Proactive subagent runner that periodically scans and dispatches registered background agents
+- BackgroundRunner class with 5-minute interval timer, schedule parsing, and suggestion extraction
+- Commands: `/background register <name> <schedule>`, `/background unregister <name>`, `/background list`, `/background suggest`, `/background accept <id>`, `/background dismiss <id>`, `/background status`, `/background help`
+- Schedule format: `every <N><s|m|h|d>` (e.g., `every 30m`, `every 1h`)
+- Background agents discover subagent `.md` files, run in ask mode, parse actionable suggestions from output
+- Suggestions accumulate in DB until user reviews via `/background suggest`
+- DB tables: `background_agents` (id, name, schedule, last_run_at, last_result, enabled), `suggestions` (id, background_agent_id, content, status)
+
+### Approval Gates
+
+- Pattern-based approval/deny rules before tool execution
+- Regex pattern matching against `toolName + " " + description`
+- Three actions: `allow` (permit), `deny` (block), `ask` (prompt for approval)
+- First matching gate wins; no match defaults to allow (permissive)
+- Commands: `/approval add <name> <pattern> <allow|deny|ask> "reason"`, `/approval list`, `/approval remove <id-prefix>`, `/approval enable <id-prefix>`, `/approval disable <id-prefix>`, `/approval help`
+- DB table: `approval_gates` (id, name, pattern, action, reason, delivery, enabled)
+
+### MCP Tool Presets
+
+- Curated registry of 10 community MCP servers with one-command install
+- Presets: filesystem, github, slack, postgres, sqlite, brave-search, fetch, memory, puppeteer, google-maps
+- Commands: `/mcp install <name>`, `/mcp presets [category]`
+- Categories: dev-tools, communication, productivity
+- `checkPresetEnv()` validates required environment variables before installation
+- Static data — no network calls for preset listing
+
+### Cross-Domain Workflows
+
+- Multi-step workflow engine with conditions, template interpolation, and step chaining
+- Four step kinds: `prompt` (Agent), `cloud` (CloudClient), `shell` (execSync), `condition` (expression evaluation)
+- Interpolation: `{{step.NAME}}` replaced with result from step NAME, `{{step.NAME.status}}` for success/error
+- Condition steps evaluate expressions and jump to `onTrue`/`onFalse` step names
+- Commands: `/workflow create <name> <json-steps>`, `/workflow run <id-prefix>`, `/workflow status <id-prefix>`, `/workflow list`, `/workflow stop <id-prefix>`, `/workflow remove <id-prefix>`, `/workflow help`
+- Sequential execution with DB persistence of current step and accumulated results
+- DB table: `workflows` (id, name, description, steps JSON, status, current_step, results JSON, delivery)
 
 ### Image Attachments
 
@@ -304,6 +361,6 @@ npm run dev -- --whatsapp                         # WhatsApp mode (QR auth)
 
 **v0.10 — Event-Driven Autonomy:** Trigger system (webhook, job_complete, cloud_complete), context providers (git_diff, git_log, shell, file), prompt template interpolation ({{context.*}}, {{event.*}}), trigger commands (/trigger add|list|remove|enable|disable|info), webhook endpoint (POST /trigger/:name), scheduler→trigger chaining, cycle detection (max depth 5).
 
-**v0.11 — Multi-Agent Orchestration (current):** Fleet execution (parallel cloud agents), goal decomposition (planner → workers), agent run registry (visibility into all agent activity), /fleet launch|status|stop|list, /orchestrate "goal", /runs, /run info. CloudClient.launchAgents() parallel helper.
+**v0.11 — Multi-Agent Orchestration:** Fleet execution (parallel cloud agents), goal decomposition (planner → workers), agent run registry (visibility into all agent activity), /fleet launch|status|stop|list, /orchestrate "goal", /runs, /run info. CloudClient.launchAgents() parallel helper.
 
-**v1.0 — General-Purpose Personal Assistant:** MCP tool ecosystem (weather, calendar, email via community MCP servers), proactive background subagents, long-term memory via MCP + SQLite, hook-based approval gates, cross-domain MCP tool chaining (deploy → Slack → Jira).
+**v1.0 — General-Purpose Personal Assistant (current):** Long-term memory (SQLite-backed /remember, /recall, /forget + memory context provider). Proactive background agents (periodic subagent execution + suggestion system). Approval gates (pattern-based allow/deny/ask rules for tool execution). Curated MCP presets (/mcp install for 10 community servers). Cross-domain workflows (multi-step engine with prompt/cloud/shell/condition steps, interpolation, conditions).

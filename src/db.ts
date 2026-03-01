@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { CursorMode } from "./mode.js";
-import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider, AgentRun, AgentRunKind, AgentRunStatus, Fleet, FleetStatus } from "./types.js";
+import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider, AgentRun, AgentRunKind, AgentRunStatus, Fleet, FleetStatus, Memory, BackgroundAgentRecord, Suggestion, ApprovalGate, ApprovalAction, Workflow, WorkflowStatus, WorkflowStep } from "./types.js";
 
 let db: Database.Database;
 
@@ -131,6 +131,65 @@ function createSchema(database: Database.Database): void {
       created_at TEXT NOT NULL,
       completed_at TEXT,
       worker_count INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS memory (
+      id TEXT PRIMARY KEY,
+      key TEXT NOT NULL UNIQUE,
+      content TEXT NOT NULL,
+      tags TEXT,
+      source TEXT NOT NULL DEFAULT 'user',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_key ON memory(key);
+
+    CREATE TABLE IF NOT EXISTS background_agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      schedule TEXT NOT NULL,
+      last_run_at TEXT,
+      last_result TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS suggestions (
+      id TEXT PRIMARY KEY,
+      background_agent_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (background_agent_id) REFERENCES background_agents(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);
+
+    CREATE TABLE IF NOT EXISTS approval_gates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      pattern TEXT NOT NULL,
+      action TEXT NOT NULL DEFAULT 'ask',
+      reason TEXT NOT NULL,
+      delivery_kind TEXT NOT NULL,
+      delivery_channel_type TEXT,
+      delivery_channel_id TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS workflows (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      steps TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      current_step INTEGER NOT NULL DEFAULT 0,
+      results TEXT NOT NULL DEFAULT '{}',
+      delivery_kind TEXT NOT NULL,
+      delivery_channel_type TEXT,
+      delivery_channel_id TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
     );
   `);
 }
@@ -937,5 +996,429 @@ export function removeFleet(id: string): boolean {
 export function findFleetByIdPrefix(prefix: string): Fleet | undefined {
   const rows = db.prepare("SELECT * FROM fleets WHERE id LIKE ?").all(`${prefix}%`) as FleetRow[];
   if (rows.length === 1) return fleetRowToFleet(rows[0]);
+  return undefined;
+}
+
+// --- Memory accessors ---
+
+interface MemoryRow {
+  id: string;
+  key: string;
+  content: string;
+  tags: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function memoryRowToMemory(row: MemoryRow): Memory {
+  let tags: string[] = [];
+  if (row.tags) {
+    try {
+      tags = JSON.parse(row.tags) as string[];
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+  return {
+    id: row.id,
+    key: row.key,
+    content: row.content,
+    tags,
+    source: row.source,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function addMemory(m: Omit<Memory, "id">): Memory {
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare(
+    `INSERT INTO memory (id, key, content, tags, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    m.key,
+    m.content,
+    m.tags.length > 0 ? JSON.stringify(m.tags) : null,
+    m.source,
+    m.createdAt,
+    m.updatedAt,
+  );
+  return getMemory(id)!;
+}
+
+export function getMemory(id: string): Memory | undefined {
+  const row = db.prepare("SELECT * FROM memory WHERE id = ?").get(id) as MemoryRow | undefined;
+  return row ? memoryRowToMemory(row) : undefined;
+}
+
+export function getMemoryByKey(key: string): Memory | undefined {
+  const row = db.prepare("SELECT * FROM memory WHERE key = ?").get(key) as MemoryRow | undefined;
+  return row ? memoryRowToMemory(row) : undefined;
+}
+
+export function searchMemory(query: string): Memory[] {
+  const pattern = `%${query}%`;
+  const rows = db.prepare(
+    "SELECT * FROM memory WHERE key LIKE ? OR content LIKE ? OR tags LIKE ? ORDER BY updated_at DESC",
+  ).all(pattern, pattern, pattern) as MemoryRow[];
+  return rows.map(memoryRowToMemory);
+}
+
+export function getAllMemories(): Memory[] {
+  const rows = db.prepare("SELECT * FROM memory ORDER BY updated_at DESC").all() as MemoryRow[];
+  return rows.map(memoryRowToMemory);
+}
+
+export function updateMemory(id: string, updates: Partial<Pick<Memory, "content" | "tags" | "updatedAt">>): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.content !== undefined) {
+    sets.push("content = ?");
+    values.push(updates.content);
+  }
+  if (updates.tags !== undefined) {
+    sets.push("tags = ?");
+    values.push(updates.tags.length > 0 ? JSON.stringify(updates.tags) : null);
+  }
+  if (updates.updatedAt !== undefined) {
+    sets.push("updated_at = ?");
+    values.push(updates.updatedAt);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE memory SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeMemory(id: string): boolean {
+  const result = db.prepare("DELETE FROM memory WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+// --- Background Agent accessors ---
+
+interface BackgroundAgentRow {
+  id: string;
+  name: string;
+  schedule: string;
+  last_run_at: string | null;
+  last_result: string | null;
+  enabled: number;
+  created_at: string;
+}
+
+function bgAgentRowToRecord(row: BackgroundAgentRow): BackgroundAgentRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    schedule: row.schedule,
+    lastRunAt: row.last_run_at,
+    lastResult: row.last_result,
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+  };
+}
+
+export function addBackgroundAgent(b: Omit<BackgroundAgentRecord, "id" | "lastRunAt" | "lastResult">): BackgroundAgentRecord {
+  const id = crypto.randomUUID().slice(0, 8);
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO background_agents (id, name, schedule, enabled, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(id, b.name, b.schedule, b.enabled ? 1 : 0, now);
+  return getBackgroundAgent(id)!;
+}
+
+export function getBackgroundAgent(id: string): BackgroundAgentRecord | undefined {
+  const row = db.prepare("SELECT * FROM background_agents WHERE id = ?").get(id) as BackgroundAgentRow | undefined;
+  return row ? bgAgentRowToRecord(row) : undefined;
+}
+
+export function getBackgroundAgentByName(name: string): BackgroundAgentRecord | undefined {
+  const row = db.prepare("SELECT * FROM background_agents WHERE name = ?").get(name) as BackgroundAgentRow | undefined;
+  return row ? bgAgentRowToRecord(row) : undefined;
+}
+
+export function getAllBackgroundAgents(): BackgroundAgentRecord[] {
+  const rows = db.prepare("SELECT * FROM background_agents ORDER BY created_at DESC").all() as BackgroundAgentRow[];
+  return rows.map(bgAgentRowToRecord);
+}
+
+export function updateBackgroundAgent(id: string, updates: Partial<Pick<BackgroundAgentRecord, "enabled" | "lastRunAt" | "lastResult">>): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.enabled !== undefined) {
+    sets.push("enabled = ?");
+    values.push(updates.enabled ? 1 : 0);
+  }
+  if (updates.lastRunAt !== undefined) {
+    sets.push("last_run_at = ?");
+    values.push(updates.lastRunAt);
+  }
+  if (updates.lastResult !== undefined) {
+    sets.push("last_result = ?");
+    values.push(updates.lastResult);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE background_agents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeBackgroundAgent(id: string): boolean {
+  const result = db.prepare("DELETE FROM background_agents WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+// --- Suggestion accessors ---
+
+interface SuggestionRow {
+  id: string;
+  background_agent_id: string;
+  content: string;
+  status: string;
+  created_at: string;
+}
+
+function suggestionRowToSuggestion(row: SuggestionRow): Suggestion {
+  return {
+    id: row.id,
+    backgroundAgentId: row.background_agent_id,
+    content: row.content,
+    status: row.status as Suggestion["status"],
+    createdAt: row.created_at,
+  };
+}
+
+export function addSuggestion(s: Omit<Suggestion, "id">): Suggestion {
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare(
+    `INSERT INTO suggestions (id, background_agent_id, content, status, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(id, s.backgroundAgentId, s.content, s.status, s.createdAt);
+  return { id, ...s };
+}
+
+export function getPendingSuggestions(): Suggestion[] {
+  const rows = db.prepare(
+    "SELECT * FROM suggestions WHERE status = 'pending' ORDER BY created_at DESC",
+  ).all() as SuggestionRow[];
+  return rows.map(suggestionRowToSuggestion);
+}
+
+export function updateSuggestion(id: string, status: Suggestion["status"]): void {
+  db.prepare("UPDATE suggestions SET status = ? WHERE id = ?").run(status, id);
+}
+
+// --- Approval Gate accessors ---
+
+interface ApprovalGateRow {
+  id: string;
+  name: string;
+  pattern: string;
+  action: string;
+  reason: string;
+  delivery_kind: string;
+  delivery_channel_type: string | null;
+  delivery_channel_id: string | null;
+  enabled: number;
+  created_at: string;
+}
+
+function gateRowToGate(row: ApprovalGateRow): ApprovalGate {
+  const delivery: DeliveryTarget =
+    row.delivery_kind === "channel" && row.delivery_channel_type && row.delivery_channel_id
+      ? { kind: "channel", channelType: row.delivery_channel_type, channelId: row.delivery_channel_id }
+      : { kind: "store" };
+
+  return {
+    id: row.id,
+    name: row.name,
+    pattern: row.pattern,
+    action: row.action as ApprovalAction,
+    reason: row.reason,
+    delivery,
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+  };
+}
+
+export function addApprovalGate(g: Omit<ApprovalGate, "id">): ApprovalGate {
+  const id = crypto.randomUUID().slice(0, 8);
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO approval_gates (id, name, pattern, action, reason, delivery_kind, delivery_channel_type, delivery_channel_id, enabled, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    g.name,
+    g.pattern,
+    g.action,
+    g.reason,
+    g.delivery.kind,
+    g.delivery.kind === "channel" ? g.delivery.channelType : null,
+    g.delivery.kind === "channel" ? g.delivery.channelId : null,
+    g.enabled ? 1 : 0,
+    now,
+  );
+  return getApprovalGate(id)!;
+}
+
+export function getApprovalGate(id: string): ApprovalGate | undefined {
+  const row = db.prepare("SELECT * FROM approval_gates WHERE id = ?").get(id) as ApprovalGateRow | undefined;
+  return row ? gateRowToGate(row) : undefined;
+}
+
+export function getAllApprovalGates(): ApprovalGate[] {
+  const rows = db.prepare("SELECT * FROM approval_gates ORDER BY created_at").all() as ApprovalGateRow[];
+  return rows.map(gateRowToGate);
+}
+
+export function updateApprovalGate(id: string, updates: Partial<Pick<ApprovalGate, "enabled">>): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.enabled !== undefined) {
+    sets.push("enabled = ?");
+    values.push(updates.enabled ? 1 : 0);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE approval_gates SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeApprovalGate(id: string): boolean {
+  const result = db.prepare("DELETE FROM approval_gates WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function findApprovalGateByIdPrefix(prefix: string): ApprovalGate | undefined {
+  const rows = db.prepare("SELECT * FROM approval_gates WHERE id LIKE ?").all(`${prefix}%`) as ApprovalGateRow[];
+  if (rows.length === 1) return gateRowToGate(rows[0]);
+  return undefined;
+}
+
+// --- Workflow accessors ---
+
+interface WorkflowRow {
+  id: string;
+  name: string;
+  description: string;
+  steps: string;
+  status: string;
+  current_step: number;
+  results: string;
+  delivery_kind: string;
+  delivery_channel_type: string | null;
+  delivery_channel_id: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+function workflowRowToWorkflow(row: WorkflowRow): Workflow {
+  const delivery: DeliveryTarget =
+    row.delivery_kind === "channel" && row.delivery_channel_type && row.delivery_channel_id
+      ? { kind: "channel", channelType: row.delivery_channel_type, channelId: row.delivery_channel_id }
+      : { kind: "store" };
+
+  let steps: WorkflowStep[] = [];
+  try {
+    steps = JSON.parse(row.steps) as WorkflowStep[];
+  } catch {
+    // Ignore invalid JSON
+  }
+
+  let results: Record<string, string> = {};
+  try {
+    results = JSON.parse(row.results) as Record<string, string>;
+  } catch {
+    // Ignore invalid JSON
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    steps,
+    status: row.status as WorkflowStatus,
+    currentStep: row.current_step,
+    results,
+    delivery,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+  };
+}
+
+export function addWorkflow(w: Omit<Workflow, "id" | "completedAt">): Workflow {
+  const id = crypto.randomUUID().slice(0, 8);
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO workflows (id, name, description, steps, status, current_step, results, delivery_kind, delivery_channel_type, delivery_channel_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    w.name,
+    w.description,
+    JSON.stringify(w.steps),
+    w.status,
+    w.currentStep,
+    JSON.stringify(w.results),
+    w.delivery.kind,
+    w.delivery.kind === "channel" ? w.delivery.channelType : null,
+    w.delivery.kind === "channel" ? w.delivery.channelId : null,
+    now,
+  );
+  return getWorkflow(id)!;
+}
+
+export function getWorkflow(id: string): Workflow | undefined {
+  const row = db.prepare("SELECT * FROM workflows WHERE id = ?").get(id) as WorkflowRow | undefined;
+  return row ? workflowRowToWorkflow(row) : undefined;
+}
+
+export function getAllWorkflows(): Workflow[] {
+  const rows = db.prepare("SELECT * FROM workflows ORDER BY created_at DESC").all() as WorkflowRow[];
+  return rows.map(workflowRowToWorkflow);
+}
+
+export function updateWorkflow(id: string, updates: Partial<Pick<Workflow, "status" | "currentStep" | "results" | "completedAt">>): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status !== undefined) {
+    sets.push("status = ?");
+    values.push(updates.status);
+  }
+  if (updates.currentStep !== undefined) {
+    sets.push("current_step = ?");
+    values.push(updates.currentStep);
+  }
+  if (updates.results !== undefined) {
+    sets.push("results = ?");
+    values.push(JSON.stringify(updates.results));
+  }
+  if (updates.completedAt !== undefined) {
+    sets.push("completed_at = ?");
+    values.push(updates.completedAt);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE workflows SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeWorkflow(id: string): boolean {
+  const result = db.prepare("DELETE FROM workflows WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function findWorkflowByIdPrefix(prefix: string): Workflow | undefined {
+  const rows = db.prepare("SELECT * FROM workflows WHERE id LIKE ?").all(`${prefix}%`) as WorkflowRow[];
+  if (rows.length === 1) return workflowRowToWorkflow(rows[0]);
   return undefined;
 }

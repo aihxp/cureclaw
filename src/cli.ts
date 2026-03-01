@@ -15,6 +15,11 @@ import { handleSchedulerCommand, handlePipelineCommand } from "./scheduler/comma
 import { handleSkillCommand } from "./skills/commands.js";
 import { handleTriggerCommand } from "./trigger/commands.js";
 import { handleWorkstationCommand, testWorkstationConnectivity } from "./workstation-commands.js";
+import { handleMemoryCommand } from "./memory/commands.js";
+import { handleApprovalCommand } from "./approval/commands.js";
+import { handleBackgroundCommand } from "./background/commands.js";
+import { handleWorkflowCommand } from "./workflow/commands.js";
+import type { BackgroundRunner } from "./background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
 // ANSI helpers
@@ -37,7 +42,7 @@ function formatTimeAgo(isoString: string): string {
   return `${days}d ago`;
 }
 
-export async function startCli(config: CursorAgentConfig): Promise<void> {
+export async function startCli(config: CursorAgentConfig, backgroundRunner?: BackgroundRunner): Promise<void> {
   const agent = new Agent(config, { useDb: true });
   const cwd = path.resolve(config.cwd || process.cwd());
 
@@ -49,7 +54,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   const saved = getSession(cwd);
   if (saved) {
     console.log(
-      bold("CureClaw v0.11") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v1.0") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(
       dim(
@@ -58,7 +63,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
     );
   } else {
     console.log(
-      bold("CureClaw v0.11") + dim(` (cursor ${config.model ?? "auto"})`),
+      bold("CureClaw v1.0") + dim(` (cursor ${config.model ?? "auto"})`),
     );
     console.log(dim("New session"));
   }
@@ -90,7 +95,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
 
     // Handle slash commands
     if (trimmed.startsWith("/")) {
-      await handleCommand(trimmed, agent, cwd, workspace, config);
+      await handleCommand(trimmed, agent, cwd, workspace, config, backgroundRunner);
       rl.prompt();
       return;
     }
@@ -155,7 +160,7 @@ export async function startCli(config: CursorAgentConfig): Promise<void> {
   });
 }
 
-async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: string, config?: CursorAgentConfig): Promise<void> {
+async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: string, config?: CursorAgentConfig, backgroundRunner?: BackgroundRunner): Promise<void> {
   const ctx = { channelType: "cli", channelId: "cli" };
 
   // 0a. Workstation commands
@@ -210,6 +215,35 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
   const fleetResult = handleFleetCommand(cmd, ctx, config);
   if (fleetResult) {
     const result = await fleetResult;
+    console.log(result.text);
+    return;
+  }
+
+  // 1c. Memory commands
+  const memResult = handleMemoryCommand(cmd);
+  if (memResult) {
+    console.log(memResult.text);
+    return;
+  }
+
+  // 1d. Approval commands
+  const approvalResult = handleApprovalCommand(cmd, ctx);
+  if (approvalResult) {
+    console.log(approvalResult.text);
+    return;
+  }
+
+  // 1e. Background commands
+  const bgResult = handleBackgroundCommand(cmd, backgroundRunner);
+  if (bgResult) {
+    console.log(bgResult.text);
+    return;
+  }
+
+  // 1f. Workflow commands (sync or async)
+  const wfResult = handleWorkflowCommand(cmd, ctx, config);
+  if (wfResult) {
+    const result = await wfResult;
     console.log(result.text);
     return;
   }
@@ -354,6 +388,12 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log('  /orchestrate   Decompose a goal and dispatch workers: /orchestrate "goal" [--cloud --repo <url>]');
       console.log("  /runs          List agent runs: /runs [--active]");
       console.log("  /run info      Show run details: /run info <id-prefix>");
+      console.log("  /remember      Store a memory: /remember <key> <content> [--tags t1,t2]");
+      console.log("  /recall        Search memories: /recall [query]");
+      console.log("  /forget        Remove a memory: /forget <key>");
+      console.log("  /background    Background agent commands (register, unregister, list, suggest, status)");
+      console.log("  /approval      Approval gate commands (add, list, remove, enable, disable)");
+      console.log("  /workflow      Workflow commands (create, run, status, list, stop, remove)");
       console.log("  /workstation   Workstation commands (list, add, remove, default, status)");
       console.log("  /hooks         Hook commands (list, add, remove)");
       console.log("  /agents        List discovered subagents");
@@ -362,7 +402,7 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log("  /run           Run a custom command: /run <name> [context]");
       console.log("  /skill create  Create a new skill: /skill create <name>");
       console.log("  /skills        List discovered skills");
-      console.log("  /mcp           MCP server commands (list, add, remove)");
+      console.log("  /mcp           MCP server commands (list, add, remove, presets, install)");
       console.log("  /plugin        Plugin commands (build, info)");
       console.log("  /help          Show this help");
       console.log("  /quit          Exit CureClaw");

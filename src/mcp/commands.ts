@@ -1,5 +1,6 @@
 import type { CommandResult } from "../scheduler/commands.js";
 import { addMcpServer, listMcpServers, removeMcpServer } from "./config.js";
+import { findPreset, listPresets, checkPresetEnv, formatPresetList } from "./presets.js";
 
 /**
  * Handle /mcp commands.
@@ -18,6 +19,8 @@ export function handleMcpCommand(input: string, workspace: string): CommandResul
         "  /mcp list                          List configured MCP servers",
         "  /mcp add <name> <command> [args]   Add an MCP server",
         "  /mcp remove <name>                 Remove an MCP server",
+        "  /mcp presets [category]            List curated MCP server presets",
+        "  /mcp install <name>                Install a preset MCP server",
       ].join("\n"),
     };
   }
@@ -32,6 +35,16 @@ export function handleMcpCommand(input: string, workspace: string): CommandResul
 
   if (rest === "remove" || rest.startsWith("remove ")) {
     return handleRemove(rest.slice(7).trim(), workspace);
+  }
+
+  if (rest === "presets" || rest.startsWith("presets ")) {
+    const category = rest.slice(7).trim() || undefined;
+    const presets = listPresets(category);
+    return { text: formatPresetList(presets) };
+  }
+
+  if (rest === "install" || rest.startsWith("install ")) {
+    return handleInstall(rest.slice(8).trim(), workspace);
   }
 
   return { text: "Unknown MCP subcommand. Type /mcp help for usage." };
@@ -66,6 +79,30 @@ function handleAdd(args: string, workspace: string): CommandResult {
       args: cmdArgs.length > 0 ? cmdArgs : undefined,
     });
     return { text: `MCP server "${name}" added.` };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { text: `Error: ${msg}` };
+  }
+}
+
+function handleInstall(presetName: string, workspace: string): CommandResult {
+  if (!presetName) {
+    return { text: "Usage: /mcp install <name>. Use /mcp presets to see available." };
+  }
+
+  const preset = findPreset(presetName);
+  if (!preset) {
+    return { text: `Unknown preset "${presetName}". Use /mcp presets to see available.` };
+  }
+
+  const envCheck = checkPresetEnv(preset);
+  if (!envCheck.ready) {
+    return { text: `Missing env vars: ${envCheck.missing.join(", ")}. Set them before installing.` };
+  }
+
+  try {
+    addMcpServer(workspace, preset.name, { command: preset.command, args: preset.args });
+    return { text: `Installed MCP server "${preset.name}": ${preset.description}` };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { text: `Error: ${msg}` };

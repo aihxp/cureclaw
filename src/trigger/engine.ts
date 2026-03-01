@@ -76,7 +76,7 @@ export async function fireTrigger(
 
   // Gather context
   const context = trigger.contextProviders.length > 0
-    ? gatherContext(trigger.contextProviders, cwd)
+    ? await gatherContext(trigger.contextProviders, cwd)
     : new Map<string, string>();
 
   // Interpolate prompt

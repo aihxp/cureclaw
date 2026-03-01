@@ -282,8 +282,8 @@ export type TriggerCondition =
 export interface ContextProvider {
   /** Used as {{context.NAME}} in prompt templates */
   name: string;
-  kind: "git_diff" | "git_log" | "shell" | "file";
-  /** For git_log: count. For shell: command. For file: path. */
+  kind: "git_diff" | "git_log" | "shell" | "file" | "memory";
+  /** For git_log: count. For shell: command. For file: path. For memory: query. */
   arg?: string;
 }
 
@@ -355,4 +355,109 @@ export interface Fleet {
 export interface Subtask {
   name: string;
   task: string;
+}
+
+// ============================================================================
+// Long-Term Memory types
+// ============================================================================
+
+export interface Memory {
+  id: string;
+  key: string;
+  content: string;
+  tags: string[];
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ============================================================================
+// Background Agent types
+// ============================================================================
+
+export type BackgroundStatus = "idle" | "running" | "stopped";
+
+export interface BackgroundAgentRecord {
+  id: string;
+  name: string;
+  schedule: string;
+  lastRunAt: string | null;
+  lastResult: string | null;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface Suggestion {
+  id: string;
+  backgroundAgentId: string;
+  content: string;
+  status: "pending" | "accepted" | "dismissed";
+  createdAt: string;
+}
+
+// ============================================================================
+// Approval Gate types
+// ============================================================================
+
+export type ApprovalAction = "allow" | "deny" | "ask";
+
+export interface ApprovalGate {
+  id: string;
+  name: string;
+  pattern: string;
+  action: ApprovalAction;
+  reason: string;
+  delivery: DeliveryTarget;
+  enabled: boolean;
+  createdAt: string;
+}
+
+// ============================================================================
+// MCP Preset types
+// ============================================================================
+
+export interface McpPreset {
+  name: string;
+  description: string;
+  command: string;
+  args: string[];
+  envVars: string[];
+  category: string;
+}
+
+// ============================================================================
+// Workflow types
+// ============================================================================
+
+export type WorkflowStepKind = "prompt" | "cloud" | "shell" | "condition";
+
+export interface WorkflowStep {
+  name: string;
+  kind: WorkflowStepKind;
+  config: {
+    prompt?: string;
+    command?: string;
+    condition?: string;
+    onTrue?: string;
+    onFalse?: string;
+    cloud?: boolean;
+    repository?: string;
+    model?: string;
+    reflect?: boolean;
+  };
+}
+
+export type WorkflowStatus = "pending" | "running" | "completed" | "error" | "stopped";
+
+export interface Workflow {
+  id: string;
+  name: string;
+  description: string;
+  steps: WorkflowStep[];
+  status: WorkflowStatus;
+  currentStep: number;
+  results: Record<string, string>;
+  delivery: DeliveryTarget;
+  createdAt: string;
+  completedAt: string | null;
 }

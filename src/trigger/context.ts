@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ContextProvider } from "../types.js";
 
 const MAX_OUTPUT_LENGTH = 8000;
-const VALID_KINDS = ["git_diff", "git_log", "shell", "file"] as const;
+const VALID_KINDS = ["git_diff", "git_log", "shell", "file", "memory"] as const;
 
 export function isValidContextKind(kind: string): kind is ContextProvider["kind"] {
   return (VALID_KINDS as readonly string[]).includes(kind);
@@ -34,6 +34,9 @@ export function parseContextProvider(spec: string): ContextProvider {
     case "file":
       name = arg ? path.basename(arg, path.extname(arg)) : "file";
       break;
+    case "memory":
+      name = arg ? `memory_${arg.replace(/\s+/g, "_")}` : "memories";
+      break;
     default:
       name = kind;
   }
@@ -45,10 +48,10 @@ export function parseContextProvider(spec: string): ContextProvider {
  * Execute all context providers and return a name→value map.
  * Errors in individual providers are captured as error strings, not thrown.
  */
-export function gatherContext(
+export async function gatherContext(
   providers: ContextProvider[],
   cwd: string,
-): Map<string, string> {
+): Promise<Map<string, string>> {
   const context = new Map<string, string>();
 
   for (const provider of providers) {
@@ -77,6 +80,11 @@ export function gatherContext(
           }
           const filePath = path.resolve(cwd, provider.arg);
           output = fs.readFileSync(filePath, "utf-8");
+          break;
+        }
+        case "memory": {
+          const { buildMemoryContext } = await import("../memory/memory.js");
+          output = buildMemoryContext(provider.arg || "");
           break;
         }
       }

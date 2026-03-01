@@ -21,6 +21,11 @@ import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler
 import { handleSkillCommand } from "../skills/commands.js";
 import { handleTriggerCommand } from "../trigger/commands.js";
 import { handleWorkstationCommand } from "../workstation-commands.js";
+import { handleMemoryCommand } from "../memory/commands.js";
+import { handleApprovalCommand } from "../approval/commands.js";
+import { handleBackgroundCommand } from "../background/commands.js";
+import { handleWorkflowCommand } from "../workflow/commands.js";
+import type { BackgroundRunner } from "../background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
 
@@ -35,6 +40,7 @@ export interface WhatsAppChannelConfig {
   allowedJids?: Set<string>;
   triggerWord?: string;
   botName?: string;
+  backgroundRunner?: BackgroundRunner;
 }
 
 interface QueuedMessage {
@@ -244,6 +250,31 @@ export class WhatsAppChannel implements Channel {
       const agentResult = handleAgentCommand(text, this.config.workspace);
       if (agentResult) {
         await this.sendMessage(jid, agentResult.text);
+        return;
+      }
+
+      const memResult = handleMemoryCommand(text);
+      if (memResult) {
+        await this.sendMessage(jid, memResult.text);
+        return;
+      }
+
+      const approvalResult = handleApprovalCommand(text, waCtx);
+      if (approvalResult) {
+        await this.sendMessage(jid, approvalResult.text);
+        return;
+      }
+
+      const bgResult = handleBackgroundCommand(text, this.config.backgroundRunner);
+      if (bgResult) {
+        await this.sendMessage(jid, bgResult.text);
+        return;
+      }
+
+      const wfResult = handleWorkflowCommand(text, waCtx, this.config.cursorConfig);
+      if (wfResult) {
+        const result = await wfResult;
+        await this.sendMessage(jid, result.text);
         return;
       }
 

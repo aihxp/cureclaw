@@ -71,65 +71,65 @@ describe("gatherContext", () => {
     fs.rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
-  it("returns empty map for empty providers", () => {
-    const result = gatherContext([], TEST_DIR);
+  it("returns empty map for empty providers", async () => {
+    const result = await gatherContext([], TEST_DIR);
     assert.strictEqual(result.size, 0);
   });
 
-  it("runs shell provider", () => {
-    const result = gatherContext(
+  it("runs shell provider", async () => {
+    const result = await gatherContext(
       [{ name: "echo", kind: "shell", arg: "echo hello" }],
       TEST_DIR,
     );
     assert.strictEqual(result.get("echo"), "hello");
   });
 
-  it("runs file provider", () => {
+  it("runs file provider", async () => {
     fs.writeFileSync(path.join(TEST_DIR, "test.txt"), "file contents here");
-    const result = gatherContext(
+    const result = await gatherContext(
       [{ name: "test", kind: "file", arg: "test.txt" }],
       TEST_DIR,
     );
     assert.strictEqual(result.get("test"), "file contents here");
   });
 
-  it("runs git_diff in a git repo", () => {
+  it("runs git_diff in a git repo", async () => {
     execSync("git init", { cwd: TEST_DIR });
     execSync("git config user.email test@test.com && git config user.name Test", { cwd: TEST_DIR });
     fs.writeFileSync(path.join(TEST_DIR, "a.txt"), "initial");
     execSync("git add . && git commit -m init", { cwd: TEST_DIR });
     fs.writeFileSync(path.join(TEST_DIR, "a.txt"), "changed");
 
-    const result = gatherContext(
+    const result = await gatherContext(
       [{ name: "diff", kind: "git_diff" }],
       TEST_DIR,
     );
     assert.ok(result.get("diff")!.includes("changed"));
   });
 
-  it("runs git_log in a git repo", () => {
+  it("runs git_log in a git repo", async () => {
     execSync("git init", { cwd: TEST_DIR });
     execSync("git config user.email test@test.com && git config user.name Test", { cwd: TEST_DIR });
     fs.writeFileSync(path.join(TEST_DIR, "a.txt"), "initial");
     execSync("git add . && git commit -m 'first commit'", { cwd: TEST_DIR });
 
-    const result = gatherContext(
+    const result = await gatherContext(
       [{ name: "log", kind: "git_log", arg: "5" }],
       TEST_DIR,
     );
     assert.ok(result.get("log")!.includes("first commit"));
   });
 
-  it("captures error for nonexistent file", () => {
-    const result = gatherContext(
+  it("captures error for nonexistent file", async () => {
+    const result = await gatherContext(
       [{ name: "missing", kind: "file", arg: "nonexistent.txt" }],
       TEST_DIR,
     );
     assert.ok(result.get("missing")!.startsWith("(error:"));
   });
 
-  it("captures error for failing shell command", () => {
-    const result = gatherContext(
+  it("captures error for failing shell command", async () => {
+    const result = await gatherContext(
       [{ name: "fail", kind: "shell", arg: "false" }],
       TEST_DIR,
     );

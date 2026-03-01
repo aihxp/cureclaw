@@ -118,7 +118,7 @@ async function startTriggerServer(config: CursorAgentConfig): Promise<{ stop: ()
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v0.11 — Cursor ecosystem orchestration platform
+  console.log(`CureClaw v1.0 — General-purpose personal assistant
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -213,10 +213,39 @@ Skill commands:
   /skill create <name>  Scaffold a new skill
   /skills               List discovered skills
 
+Memory commands:
+  /remember <key> <content> [--tags t1,t2]   Store a memory
+  /recall [query]                             Search memories
+  /forget <key>                               Remove a memory
+
+Background agent commands:
+  /background register <name> <schedule>   Register a subagent
+  /background unregister <name>            Remove a background agent
+  /background list                         List registered agents
+  /background suggest                      Show pending suggestions
+  /background status                       Show runner status
+
+Approval gate commands:
+  /approval add <name> <pattern> <action> "reason"
+  /approval list          List all gates
+  /approval remove <id>   Remove a gate
+  /approval enable <id>   Enable a gate
+  /approval disable <id>  Disable a gate
+
+Workflow commands:
+  /workflow create <name> <json-steps>   Create a workflow
+  /workflow run <id>      Execute a workflow
+  /workflow status <id>   Show workflow status
+  /workflow list          List all workflows
+  /workflow stop <id>     Stop a running workflow
+  /workflow remove <id>   Delete a workflow
+
 MCP commands:
   /mcp list             List configured MCP servers
   /mcp add <name> <command> [args]   Add an MCP server
   /mcp remove <name>    Remove an MCP server
+  /mcp presets           List curated MCP server presets
+  /mcp install <name>   Install a preset MCP server
 
 Plugin commands:
   /plugin build         Build a distributable plugin
@@ -262,6 +291,10 @@ async function main(): Promise<void> {
     clearSession(path.resolve(config.cwd || process.cwd()));
   }
 
+  // Create background runner (shared across all modes)
+  const { BackgroundRunner } = await import("./background/runner.js");
+  const backgroundRunner = new BackgroundRunner(config);
+
   if (telegram) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
@@ -292,15 +325,17 @@ async function main(): Promise<void> {
       allowedUsers,
       workspace,
       cursorConfig: { ...config, cwd: workspace },
+      backgroundRunner,
     });
 
     const scheduler = new Scheduler({ ...config, cwd: workspace });
     scheduler.start();
+    backgroundRunner.start();
 
     const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
 
-    process.once("SIGINT", () => { scheduler.stop(); triggerServer?.stop(); channel.stop(); });
-    process.once("SIGTERM", () => { scheduler.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
   } else if (whatsapp) {
@@ -333,15 +368,17 @@ async function main(): Promise<void> {
       triggerWord,
       botName,
       cursorConfig: { ...config, cwd: workspace },
+      backgroundRunner,
     });
 
     const scheduler = new Scheduler({ ...config, cwd: workspace });
     scheduler.start();
+    backgroundRunner.start();
 
     const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
 
-    process.once("SIGINT", () => { scheduler.stop(); triggerServer?.stop(); channel.stop(); });
-    process.once("SIGTERM", () => { scheduler.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
   } else if (oneShot) {
@@ -364,11 +401,13 @@ async function main(): Promise<void> {
   } else {
     const scheduler = new Scheduler(config);
     scheduler.start();
+    backgroundRunner.start();
 
     const triggerServer = await startTriggerServer(config);
 
-    await startCli(config);
+    await startCli(config, backgroundRunner);
     scheduler.stop();
+    backgroundRunner.stop();
     await triggerServer?.stop();
   }
 }

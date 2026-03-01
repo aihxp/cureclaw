@@ -57,7 +57,7 @@ CureClaw does not call LLM APIs directly. Cursor CLI handles model selection, to
 ## CLI Usage
 
 ```
-CureClaw v0.11 — Cursor ecosystem orchestration platform
+CureClaw v1.0 — Cursor ecosystem orchestration platform
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -110,7 +110,13 @@ Options:
 | `/run <name> [args]` | Run a custom command as a prompt |
 | `/skill create <name>` | Scaffold a new skill |
 | `/skills` | List discovered skills |
-| `/mcp list\|add\|remove` | Manage MCP server configuration |
+| `/mcp list\|add\|remove\|install\|presets` | Manage MCP server configuration + presets |
+| `/remember <key> <content>` | Store a persistent memory |
+| `/recall [query]` | Search or list memories |
+| `/forget <key>` | Remove a memory |
+| `/background register\|unregister\|list\|suggest\|status` | Manage background agents |
+| `/approval add\|list\|remove\|enable\|disable` | Manage approval gates |
+| `/workflow create\|run\|status\|list\|stop\|remove` | Manage cross-domain workflows |
 | `/plugin build\|info` | Build or inspect plugin package |
 | `/help` | Show available commands |
 | `/quit` | Exit CureClaw |
@@ -317,6 +323,132 @@ Track all agent executions across the system:
 ```
 
 Runs are tracked for fleet workers, orchestration steps, trigger-fired agents, and scheduled jobs.
+
+### Long-Term Memory
+
+Persist information across sessions with key-value memory storage:
+
+```bash
+# Store a memory
+/remember api-key "Use env var AUTH_TOKEN for the staging API"
+
+# Store with tags
+/remember deploy-process "Run npm build then push to main" --tags deploy,ci
+
+# Search memories
+/recall api
+
+# List all memories
+/recall
+
+# Remove a memory
+/forget api-key
+```
+
+Memories are stored in SQLite and searchable by key, content, and tags. Triggers can inject relevant memories into prompts via the `memory` context provider:
+
+```bash
+/trigger add webhook deploy "Deploy with context:\n\n{{context.memories}}" --context memory:deploy
+```
+
+### Background Agents
+
+Register subagents to run periodically in the background and propose actions:
+
+```bash
+# Register a background agent (runs every 30 minutes)
+/background register reviewer every 30m
+
+# Check runner status
+/background status
+
+# List registered agents
+/background list
+
+# View pending suggestions
+/background suggest
+
+# Accept or dismiss suggestions
+/background accept a3f2
+/background dismiss b5c1
+
+# Remove a background agent
+/background unregister reviewer
+```
+
+Background agents discover subagent `.md` files, run them in ask mode, and parse actionable suggestions from their output. Suggestions accumulate until reviewed.
+
+### Approval Gates
+
+Control tool execution with pattern-based approval rules:
+
+```bash
+# Block all rm -rf commands
+/approval add no-rm-rf "rm\s+-rf" deny "Prevent recursive force delete"
+
+# Ask before any git push
+/approval add confirm-push "git\s+push" ask "Confirm before pushing"
+
+# Allow all file reads
+/approval add allow-reads "readFile|readToolCall" allow "File reads are safe"
+
+# List gates
+/approval list
+
+# Disable/enable a gate
+/approval disable a3f2
+/approval enable a3f2
+
+# Remove a gate
+/approval remove a3f2
+```
+
+Gates use regex patterns matched against tool names and descriptions. First match wins; no match defaults to allow.
+
+### MCP Tool Presets
+
+Install curated community MCP servers with a single command:
+
+```bash
+# List available presets
+/mcp presets
+
+# Filter by category
+/mcp presets dev-tools
+
+# Install a preset
+/mcp install github
+/mcp install slack
+/mcp install brave-search
+```
+
+Available presets: filesystem, github, slack, postgres, sqlite, brave-search, fetch, memory, puppeteer, google-maps. Required environment variables are validated before installation.
+
+### Cross-Domain Workflows
+
+Create and run multi-step workflows with conditions and template interpolation:
+
+```bash
+# Create a workflow
+/workflow create deploy-notify '[{"name":"build","kind":"shell","config":{"command":"npm run build"}},{"name":"notify","kind":"shell","config":{"command":"echo Deploy complete: {{step.build}}"}}]'
+
+# Run a workflow by ID prefix
+/workflow run depl
+
+# Check workflow status
+/workflow status depl
+
+# List all workflows
+/workflow list
+
+# Stop a running workflow
+/workflow stop depl
+
+# Remove a workflow
+/workflow remove depl
+```
+
+Four step kinds: `prompt` (Agent execution), `cloud` (Cloud API), `shell` (command execution), `condition` (expression evaluation with branching).
 
 ### Agent Modes
 
@@ -631,9 +763,22 @@ src/
 │   ├── scaffold.ts        Generate skill dir + SKILL.md template
 │   ├── list.ts            Discover skills from standard paths
 │   └── commands.ts        /skill create, /skills
+├── memory/
+│   ├── memory.ts          Long-term memory CRUD + search + context builder
+│   └── commands.ts        /remember, /recall, /forget
+├── background/
+│   ├── runner.ts          BackgroundRunner (periodic scan + agent dispatch)
+│   └── commands.ts        /background register|unregister|list|suggest|status
+├── approval/
+│   ├── gates.ts           Gate matching, approval check logic
+│   └── commands.ts        /approval add|list|remove|enable|disable
+├── workflow/
+│   ├── engine.ts          Workflow step execution engine
+│   └── commands.ts        /workflow create|run|status|list|stop|remove
 ├── mcp/
 │   ├── config.ts          Read/write .cursor/mcp.json
-│   └── commands.ts        /mcp list|add|remove
+│   ├── presets.ts          Curated MCP server registry (10 presets)
+│   └── commands.ts        /mcp list|add|remove|install|presets
 ├── fleet/
 │   ├── registry.ts        Agent run tracking (startRun, completeRun, formatting)
 │   ├── fleet.ts           Fleet execution engine (parallel cloud agents)
@@ -658,21 +803,29 @@ src/
 │  CLI / Telegram / WhatsApp / Your App       │
 │  Subscribes to AgentEvents, renders output  │
 ├──────────────────────┬──────────────────────┤
+│  Memory / Approval   │  Workflows           │
+│  /remember, gates    │  Multi-step engine   │
+├──────────────────────┼──────────────────────┤
 │  Scheduler           │  Trigger Engine      │
 │  Timer loop, backoff │  Event → match → fire│
 ├──────────────────────┼──────────────────────┤
-│  Fleet / Orchestrate │  Agent Run Registry  │
-│  Parallel cloud, decompose │ Track all runs│
+│  Fleet / Orchestrate │  Background Agents   │
+│  Parallel cloud,     │  Periodic scan,      │
+│  decompose           │  suggestions         │
+├──────────────────────┼──────────────────────┤
+│  Agent Run Registry  │  MCP Presets         │
+│  Track all runs      │  Curated servers     │
 ├──────────────────────┼──────────────────────┤
 │  Delivery Registry   │  Context Providers   │
-│  Channel handlers    │  git_diff, shell, .. │
+│  Channel handlers    │  git_diff, shell,    │
+│                      │  file, memory        │
 ├──────────────────────┴──────────────────────┤
 │  Agent                                      │
 │  State management, DB persistence, resume   │
 ├──────────────────────┬──────────────────────┤
 │  Agent Loop          │  SQLite (db.ts)      │
 │  CursorEvent →       │  sessions, history,  │
-│  AgentEvent          │  config, jobs        │
+│  AgentEvent          │  config, jobs, memory│
 ├──────────────────────┴──────────────────────┤
 │  Cursor Client                              │
 │  Spawns subprocess (local or SSH)           │
@@ -1072,11 +1225,11 @@ Cursor CLI's `--print` mode is one-shot: pass a prompt, get results, process exi
 - [x] **Cross-channel support** — fleet/orchestrate/runs commands in CLI, Telegram, WhatsApp
 
 ### v1.0 — General-Purpose Personal Assistant
-- [ ] **MCP tool ecosystem** — weather, calendar, email, reminders via community MCP servers (Cursor discovers and manages them natively)
-- [ ] **Proactive agents** — background subagents monitor context via hooks and propose actions ("tests failing since last push — want me to fix?")
-- [ ] **Long-term memory** — persistent user preferences via MCP server backed by SQLite, injected into agent context automatically
-- [ ] **Approval gates** — hook-based confirmation flow for high-stakes actions (send email, deploy, book appointment) with human-in-the-loop via channels
-- [ ] **Cross-domain tool chaining** — MCP servers bridge coding and life tools (e.g., deploy via cloud agent → notify Slack via MCP → update Jira via MCP)
+- [x] **Long-term memory** — SQLite-backed persistent memory with `/remember`, `/recall`, `/forget` + memory context provider for triggers
+- [x] **Background agents** — proactive subagent runner with periodic scan, schedule-based dispatch, and suggestion system
+- [x] **Approval gates** — pattern-based allow/deny/ask rules for tool execution with regex matching
+- [x] **MCP tool presets** — curated registry of 10 community MCP servers with one-command `/mcp install`
+- [x] **Cross-domain workflows** — multi-step workflow engine with prompt/cloud/shell/condition steps, template interpolation, and conditional branching
 
 ## License
 

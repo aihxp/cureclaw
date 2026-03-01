@@ -13,6 +13,11 @@ import { registerDeliveryHandler, unregisterDeliveryHandler } from "../scheduler
 import { handleSkillCommand } from "../skills/commands.js";
 import { handleTriggerCommand } from "../trigger/commands.js";
 import { handleWorkstationCommand } from "../workstation-commands.js";
+import { handleMemoryCommand } from "../memory/commands.js";
+import { handleApprovalCommand } from "../approval/commands.js";
+import { handleBackgroundCommand } from "../background/commands.js";
+import { handleWorkflowCommand } from "../workflow/commands.js";
+import type { BackgroundRunner } from "../background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
 import type { Channel } from "./channel.js";
 
@@ -23,6 +28,7 @@ export interface TelegramChannelConfig {
   allowedUsers?: Set<number>;
   workspace: string;
   cursorConfig: CursorAgentConfig;
+  backgroundRunner?: BackgroundRunner;
 }
 
 export class TelegramChannel implements Channel {
@@ -334,6 +340,59 @@ export class TelegramChannel implements Channel {
         return;
       }
       await ctx.reply(result?.text ?? "Usage: /run <command-name>");
+    });
+
+    this.bot.command("remember", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleMemoryCommand(`/remember ${args}`);
+      await ctx.reply(result?.text ?? "Usage: /remember <key> <content>");
+    });
+
+    this.bot.command("recall", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleMemoryCommand(`/recall ${args}`);
+      await ctx.reply(result?.text ?? "No memories found.");
+    });
+
+    this.bot.command("forget", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleMemoryCommand(`/forget ${args}`);
+      await ctx.reply(result?.text ?? "Usage: /forget <key>");
+    });
+
+    this.bot.command("background", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleBackgroundCommand(`/background ${args}`, this.config.backgroundRunner);
+      await ctx.reply(result?.text ?? "Usage: /background help");
+    });
+
+    this.bot.command("approval", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const result = handleApprovalCommand(`/approval ${args}`, {
+        channelType: "telegram",
+        channelId: String(chatId),
+      });
+      await ctx.reply(result?.text ?? "Usage: /approval help");
+    });
+
+    this.bot.command("workflow", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const wfCtx = { channelType: "telegram", channelId: String(chatId) };
+      const resultPromise = handleWorkflowCommand(`/workflow ${args}`, wfCtx, this.config.cursorConfig);
+      if (resultPromise) {
+        const result = await resultPromise;
+        await ctx.reply(result.text);
+      }
     });
 
     // Handle photo messages for image passthrough
