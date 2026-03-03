@@ -19,6 +19,10 @@ import { handleBackgroundCommand } from "../background/commands.js";
 import { handleWorkflowCommand } from "../workflow/commands.js";
 import { handleIdentityCommand } from "../identity/commands.js";
 import { handleNotifyCommand } from "../notifications/commands.js";
+import { handleWorktreeCommand } from "../worktree/commands.js";
+import { handleSpawnCommand } from "../spawn/commands.js";
+import { handleMonitorCommand } from "../monitor/commands.js";
+import { handleReviewCommand } from "../review/commands.js";
 import { getGreeting } from "../identity/identity.js";
 import type { BackgroundRunner } from "../background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
@@ -416,6 +420,56 @@ export class TelegramChannel implements Channel {
         await ctx.reply((result as { text: string }).text);
       } else {
         await ctx.reply("Usage: /notify help");
+      }
+    });
+
+    this.bot.command("worktree", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const resultOrPromise = handleWorktreeCommand(`/worktree ${args}`);
+      if (resultOrPromise) {
+        const result = resultOrPromise instanceof Promise ? await resultOrPromise : resultOrPromise;
+        await ctx.reply((result as { text: string }).text);
+      } else {
+        await ctx.reply("Usage: /worktree help");
+      }
+    });
+
+    this.bot.command("spawn", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const args = ctx.match?.toString().trim() ?? "";
+      const resultOrPromise = handleSpawnCommand(`/spawn ${args}`);
+      if (resultOrPromise) {
+        const result = resultOrPromise instanceof Promise ? await resultOrPromise : resultOrPromise;
+        await ctx.reply((result as { text: string }).text);
+      } else {
+        await ctx.reply("Usage: /spawn help");
+      }
+    });
+
+    this.bot.command("monitor", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = String(ctx.chat.id);
+      const args = ctx.match?.toString().trim() ?? "";
+      const resultOrPromise = handleMonitorCommand(`/monitor ${args}`, { channelType: "telegram", channelId: chatId }, this.config.cursorConfig);
+      if (resultOrPromise) {
+        const result = resultOrPromise instanceof Promise ? await resultOrPromise : resultOrPromise;
+        await ctx.reply((result as { text: string }).text);
+      } else {
+        await ctx.reply("Usage: /monitor help");
+      }
+    });
+
+    this.bot.command("review", async (ctx) => {
+      if (!this.isAllowed(ctx.from?.id)) return;
+      const chatId = String(ctx.chat.id);
+      const args = ctx.match?.toString().trim() ?? "";
+      const resultOrPromise = handleReviewCommand(`/review ${args}`, { channelType: "telegram", channelId: chatId }, this.config.cursorConfig);
+      if (resultOrPromise) {
+        const result = resultOrPromise instanceof Promise ? await resultOrPromise : resultOrPromise;
+        await ctx.reply((result as { text: string }).text);
+      } else {
+        await ctx.reply("Usage: /review help");
       }
     });
 

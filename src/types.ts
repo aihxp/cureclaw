@@ -312,7 +312,7 @@ export interface Trigger {
 // Agent Run types (tracks all agent executions across the system)
 // ============================================================================
 
-export type AgentRunKind = "fleet" | "orchestrate" | "trigger" | "job" | "prompt" | "subagent";
+export type AgentRunKind = "fleet" | "orchestrate" | "trigger" | "job" | "prompt" | "subagent" | "review" | "spawn" | "monitor" | "adaptive";
 export type AgentRunStatus = "running" | "success" | "error" | "stopped";
 
 export interface AgentRun {
@@ -490,4 +490,90 @@ export interface NotificationLog {
   status: "sent" | "failed";
   error: string | null;
   createdAt: string;
+}
+
+// ============================================================================
+// Git Worktree types (agent isolation via git worktrees)
+// ============================================================================
+
+export type WorktreeStatus = "active" | "idle" | "removed";
+
+export interface GitWorktree {
+  id: string;
+  branch: string;
+  path: string;
+  baseBranch: string;
+  taskId: string | null;
+  status: WorktreeStatus;
+  createdAt: string;
+  removedAt: string | null;
+}
+
+// ============================================================================
+// Spawned Process types (external process management)
+// ============================================================================
+
+export type SpawnedStatus = "running" | "stopped" | "exited";
+
+export interface SpawnedProcess {
+  id: string;
+  name: string;
+  command: string;
+  pid: number | null;
+  logFile: string;
+  worktreeId: string | null;
+  cwd: string;
+  status: SpawnedStatus;
+  exitCode: number | null;
+  createdAt: string;
+  stoppedAt: string | null;
+}
+
+// ============================================================================
+// CI/PR Monitor types
+// ============================================================================
+
+export type MonitorStatus = "active" | "stopped" | "completed";
+export type CiStatus = "pending" | "passing" | "failing" | "unknown";
+
+export interface Monitor {
+  id: string;
+  branch: string;
+  prNumber: number | null;
+  ciStatus: CiStatus;
+  autoFix: boolean;
+  maxRetries: number;
+  retryCount: number;
+  delivery: DeliveryTarget;
+  worktreeId: string | null;
+  status: MonitorStatus;
+  lastCheckAt: string | null;
+  createdAt: string;
+  stoppedAt: string | null;
+}
+
+// ============================================================================
+// Code Review types
+// ============================================================================
+
+export interface ReviewRecord {
+  id: string;
+  branch: string;
+  prNumber: number | null;
+  models: string[];
+  delivery: DeliveryTarget;
+  status: "running" | "completed" | "error";
+  summary: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+// ============================================================================
+// Adaptive Retry types
+// ============================================================================
+
+export interface AdaptiveConfig {
+  maxRetries: number;
+  evaluator: "ci" | "test" | "review" | "shell";
+  evaluatorArg?: string;
 }

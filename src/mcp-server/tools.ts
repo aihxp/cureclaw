@@ -10,6 +10,10 @@ import {
   getPendingSuggestions,
   getAllWorkflows,
   getAllTriggers,
+  getAllWorktrees,
+  getAllSpawned,
+  getActiveMonitors,
+  getAllReviews,
 } from "../db.js";
 import {
   getActiveAgentRuns,
@@ -155,6 +159,66 @@ export const toolDefinitions: McpToolDefinition[] = [
       required: ["action"],
     },
   },
+  {
+    name: "cureclaw_worktrees",
+    description: "List git worktrees used for agent isolation",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list"],
+          description: "Action to perform",
+        },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "cureclaw_processes",
+    description: "List spawned background processes",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list"],
+          description: "Action to perform",
+        },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "cureclaw_monitors",
+    description: "List active CI/PR monitors",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list"],
+          description: "Action to perform",
+        },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "cureclaw_reviews",
+    description: "List code reviews",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list"],
+          description: "Action to perform",
+        },
+      },
+      required: ["action"],
+    },
+  },
 ];
 
 /** Handle a tool call and return the result. */
@@ -180,6 +244,14 @@ export function handleToolCall(
         return handleRuns(args);
       case "cureclaw_triggers":
         return handleTriggers();
+      case "cureclaw_worktrees":
+        return handleWorktrees();
+      case "cureclaw_processes":
+        return handleProcesses();
+      case "cureclaw_monitors":
+        return handleMonitors();
+      case "cureclaw_reviews":
+        return handleReviews();
       default:
         return {
           content: [{ type: "text", text: `Unknown tool: ${toolName}` }],
@@ -204,7 +276,7 @@ function handleStatus(): McpToolResult {
   const triggers = getAllTriggers();
 
   const text = [
-    "CureClaw v1.1 Status",
+    "CureClaw v1.2 Status",
     `Sessions: ${sessions.length}`,
     `Jobs: ${jobs.length} (${jobs.filter((j) => j.enabled).length} enabled)`,
     `Memories: ${memories.length}`,
@@ -385,5 +457,51 @@ function handleTriggers(): McpToolResult {
     const status = t.enabled ? "enabled" : "disabled";
     return `${t.id} | ${t.name} | ${t.condition.kind} | ${status} | fires:${t.fireCount} | lastFired:${t.lastFiredAt ?? "never"}`;
   });
+  return { content: [{ type: "text", text: lines.join("\n") }] };
+}
+
+function handleWorktrees(): McpToolResult {
+  const worktrees = getAllWorktrees();
+  if (worktrees.length === 0) {
+    return { content: [{ type: "text", text: "No worktrees." }] };
+  }
+  const lines = worktrees.map(
+    (w) => `${w.id} | ${w.branch} | ${w.status} | base:${w.baseBranch} | ${w.path}`,
+  );
+  return { content: [{ type: "text", text: lines.join("\n") }] };
+}
+
+function handleProcesses(): McpToolResult {
+  const processes = getAllSpawned();
+  if (processes.length === 0) {
+    return { content: [{ type: "text", text: "No spawned processes." }] };
+  }
+  const lines = processes.map((p) => {
+    const pid = p.pid ? `pid:${p.pid}` : "no-pid";
+    return `${p.id} | ${p.name} | ${p.status} | ${pid} | cmd:${p.command.slice(0, 60)}`;
+  });
+  return { content: [{ type: "text", text: lines.join("\n") }] };
+}
+
+function handleMonitors(): McpToolResult {
+  const monitors = getActiveMonitors();
+  if (monitors.length === 0) {
+    return { content: [{ type: "text", text: "No active monitors." }] };
+  }
+  const lines = monitors.map((m) => {
+    const autoFix = m.autoFix ? `auto-fix(${m.retryCount}/${m.maxRetries})` : "manual";
+    return `${m.id} | ${m.branch} | ${m.ciStatus} | ${autoFix} | lastCheck:${m.lastCheckAt ?? "never"}`;
+  });
+  return { content: [{ type: "text", text: lines.join("\n") }] };
+}
+
+function handleReviews(): McpToolResult {
+  const reviews = getAllReviews();
+  if (reviews.length === 0) {
+    return { content: [{ type: "text", text: "No reviews." }] };
+  }
+  const lines = reviews.map(
+    (r) => `${r.id} | ${r.branch} | ${r.status} | models:${r.models.join(",")} | ${r.createdAt}`,
+  );
   return { content: [{ type: "text", text: lines.join("\n") }] };
 }

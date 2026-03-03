@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { CursorMode } from "./mode.js";
-import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider, AgentRun, AgentRunKind, AgentRunStatus, Fleet, FleetStatus, Memory, BackgroundAgentRecord, Suggestion, ApprovalGate, ApprovalAction, Workflow, WorkflowStatus, WorkflowStep, Identity, NotificationLog } from "./types.js";
+import type { Job, JobSchedule, DeliveryTarget, Pipeline, Workstation, Trigger, TriggerKind, TriggerCondition, ContextProvider, AgentRun, AgentRunKind, AgentRunStatus, Fleet, FleetStatus, Memory, BackgroundAgentRecord, Suggestion, ApprovalGate, ApprovalAction, Workflow, WorkflowStatus, WorkflowStep, Identity, NotificationLog, GitWorktree, WorktreeStatus, SpawnedProcess, SpawnedStatus, Monitor, MonitorStatus, CiStatus, ReviewRecord } from "./types.js";
 
 let db: Database.Database;
 
@@ -214,6 +214,63 @@ function createSchema(database: Database.Database): void {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_notification_log_created ON notification_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS git_worktrees (
+      id TEXT PRIMARY KEY,
+      branch TEXT NOT NULL UNIQUE,
+      path TEXT NOT NULL,
+      base_branch TEXT NOT NULL DEFAULT 'main',
+      task_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      removed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS spawned_processes (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      command TEXT NOT NULL,
+      pid INTEGER,
+      log_file TEXT NOT NULL,
+      worktree_id TEXT,
+      cwd TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      exit_code INTEGER,
+      created_at TEXT NOT NULL,
+      stopped_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS monitors (
+      id TEXT PRIMARY KEY,
+      branch TEXT NOT NULL,
+      pr_number INTEGER,
+      ci_status TEXT NOT NULL DEFAULT 'unknown',
+      auto_fix INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 3,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      delivery_kind TEXT NOT NULL,
+      delivery_channel_type TEXT,
+      delivery_channel_id TEXT,
+      worktree_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      last_check_at TEXT,
+      created_at TEXT NOT NULL,
+      stopped_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS reviews (
+      id TEXT PRIMARY KEY,
+      branch TEXT NOT NULL,
+      pr_number INTEGER,
+      models TEXT NOT NULL,
+      delivery_kind TEXT NOT NULL,
+      delivery_channel_type TEXT,
+      delivery_channel_id TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      summary TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    );
   `);
 }
 
@@ -1574,4 +1631,410 @@ export function getRecentNotifications(limit = 20): NotificationLog[] {
     "SELECT * FROM notification_log ORDER BY created_at DESC LIMIT ?",
   ).all(limit) as NotificationLogRow[];
   return rows.map(notifRowToNotificationLog);
+}
+
+// --- Git Worktree accessors ---
+
+interface WorktreeRow {
+  id: string;
+  branch: string;
+  path: string;
+  base_branch: string;
+  task_id: string | null;
+  status: string;
+  created_at: string;
+  removed_at: string | null;
+}
+
+function worktreeRowToWorktree(row: WorktreeRow): GitWorktree {
+  return {
+    id: row.id,
+    branch: row.branch,
+    path: row.path,
+    baseBranch: row.base_branch,
+    taskId: row.task_id,
+    status: row.status as WorktreeStatus,
+    createdAt: row.created_at,
+    removedAt: row.removed_at,
+  };
+}
+
+export function addWorktree(w: Omit<GitWorktree, "id" | "removedAt">): GitWorktree {
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare(
+    `INSERT INTO git_worktrees (id, branch, path, base_branch, task_id, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, w.branch, w.path, w.baseBranch, w.taskId, w.status, w.createdAt);
+  return getWorktreeById(id)!;
+}
+
+export function getWorktreeById(id: string): GitWorktree | undefined {
+  const row = db.prepare("SELECT * FROM git_worktrees WHERE id = ?").get(id) as WorktreeRow | undefined;
+  return row ? worktreeRowToWorktree(row) : undefined;
+}
+
+export function getWorktreeByBranch(branch: string): GitWorktree | undefined {
+  const row = db.prepare("SELECT * FROM git_worktrees WHERE branch = ?").get(branch) as WorktreeRow | undefined;
+  return row ? worktreeRowToWorktree(row) : undefined;
+}
+
+export function getActiveWorktrees(): GitWorktree[] {
+  const rows = db.prepare(
+    "SELECT * FROM git_worktrees WHERE status = 'active' ORDER BY created_at DESC",
+  ).all() as WorktreeRow[];
+  return rows.map(worktreeRowToWorktree);
+}
+
+export function getAllWorktrees(): GitWorktree[] {
+  const rows = db.prepare("SELECT * FROM git_worktrees ORDER BY created_at DESC").all() as WorktreeRow[];
+  return rows.map(worktreeRowToWorktree);
+}
+
+export function updateWorktreeRecord(id: string, updates: Partial<Pick<GitWorktree, "status" | "removedAt" | "taskId">>): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status !== undefined) {
+    sets.push("status = ?");
+    values.push(updates.status);
+  }
+  if (updates.removedAt !== undefined) {
+    sets.push("removed_at = ?");
+    values.push(updates.removedAt);
+  }
+  if (updates.taskId !== undefined) {
+    sets.push("task_id = ?");
+    values.push(updates.taskId);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE git_worktrees SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeWorktreeRecord(id: string): boolean {
+  const result = db.prepare("DELETE FROM git_worktrees WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+// --- Spawned Process accessors ---
+
+interface SpawnedProcessRow {
+  id: string;
+  name: string;
+  command: string;
+  pid: number | null;
+  log_file: string;
+  worktree_id: string | null;
+  cwd: string;
+  status: string;
+  exit_code: number | null;
+  created_at: string;
+  stopped_at: string | null;
+}
+
+function spawnedRowToProcess(row: SpawnedProcessRow): SpawnedProcess {
+  return {
+    id: row.id,
+    name: row.name,
+    command: row.command,
+    pid: row.pid,
+    logFile: row.log_file,
+    worktreeId: row.worktree_id,
+    cwd: row.cwd,
+    status: row.status as SpawnedStatus,
+    exitCode: row.exit_code,
+    createdAt: row.created_at,
+    stoppedAt: row.stopped_at,
+  };
+}
+
+export function addSpawnedProcess(p: Omit<SpawnedProcess, "id" | "stoppedAt" | "exitCode">): SpawnedProcess {
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare(
+    `INSERT INTO spawned_processes (id, name, command, pid, log_file, worktree_id, cwd, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, p.name, p.command, p.pid, p.logFile, p.worktreeId, p.cwd, p.status, p.createdAt);
+  return getSpawnedProcess(id)!;
+}
+
+export function getSpawnedProcess(id: string): SpawnedProcess | undefined {
+  const row = db.prepare("SELECT * FROM spawned_processes WHERE id = ?").get(id) as SpawnedProcessRow | undefined;
+  return row ? spawnedRowToProcess(row) : undefined;
+}
+
+export function getSpawnedByName(name: string): SpawnedProcess | undefined {
+  const row = db.prepare("SELECT * FROM spawned_processes WHERE name = ?").get(name) as SpawnedProcessRow | undefined;
+  return row ? spawnedRowToProcess(row) : undefined;
+}
+
+export function getRunningSpawned(): SpawnedProcess[] {
+  const rows = db.prepare(
+    "SELECT * FROM spawned_processes WHERE status = 'running' ORDER BY created_at DESC",
+  ).all() as SpawnedProcessRow[];
+  return rows.map(spawnedRowToProcess);
+}
+
+export function getAllSpawned(): SpawnedProcess[] {
+  const rows = db.prepare("SELECT * FROM spawned_processes ORDER BY created_at DESC").all() as SpawnedProcessRow[];
+  return rows.map(spawnedRowToProcess);
+}
+
+export function updateSpawnedProcess(id: string, updates: Partial<Pick<SpawnedProcess, "status" | "exitCode" | "stoppedAt" | "pid">>): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status !== undefined) {
+    sets.push("status = ?");
+    values.push(updates.status);
+  }
+  if (updates.exitCode !== undefined) {
+    sets.push("exit_code = ?");
+    values.push(updates.exitCode);
+  }
+  if (updates.stoppedAt !== undefined) {
+    sets.push("stopped_at = ?");
+    values.push(updates.stoppedAt);
+  }
+  if (updates.pid !== undefined) {
+    sets.push("pid = ?");
+    values.push(updates.pid);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE spawned_processes SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeSpawnedProcess(id: string): boolean {
+  const result = db.prepare("DELETE FROM spawned_processes WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+// --- Monitor accessors ---
+
+interface MonitorRow {
+  id: string;
+  branch: string;
+  pr_number: number | null;
+  ci_status: string;
+  auto_fix: number;
+  max_retries: number;
+  retry_count: number;
+  delivery_kind: string;
+  delivery_channel_type: string | null;
+  delivery_channel_id: string | null;
+  worktree_id: string | null;
+  status: string;
+  last_check_at: string | null;
+  created_at: string;
+  stopped_at: string | null;
+}
+
+function monitorRowToMonitor(row: MonitorRow): Monitor {
+  const delivery: DeliveryTarget =
+    row.delivery_kind === "channel" && row.delivery_channel_type && row.delivery_channel_id
+      ? { kind: "channel", channelType: row.delivery_channel_type, channelId: row.delivery_channel_id }
+      : { kind: "store" };
+
+  return {
+    id: row.id,
+    branch: row.branch,
+    prNumber: row.pr_number,
+    ciStatus: row.ci_status as CiStatus,
+    autoFix: row.auto_fix === 1,
+    maxRetries: row.max_retries,
+    retryCount: row.retry_count,
+    delivery,
+    worktreeId: row.worktree_id,
+    status: row.status as MonitorStatus,
+    lastCheckAt: row.last_check_at,
+    createdAt: row.created_at,
+    stoppedAt: row.stopped_at,
+  };
+}
+
+export function addMonitor(m: Omit<Monitor, "id" | "stoppedAt" | "lastCheckAt" | "retryCount" | "ciStatus">): Monitor {
+  const id = crypto.randomUUID().slice(0, 8);
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO monitors (id, branch, pr_number, ci_status, auto_fix, max_retries, retry_count, delivery_kind, delivery_channel_type, delivery_channel_id, worktree_id, status, created_at)
+     VALUES (?, ?, ?, 'unknown', ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    m.branch,
+    m.prNumber,
+    m.autoFix ? 1 : 0,
+    m.maxRetries,
+    m.delivery.kind,
+    m.delivery.kind === "channel" ? m.delivery.channelType : null,
+    m.delivery.kind === "channel" ? m.delivery.channelId : null,
+    m.worktreeId,
+    m.status,
+    now,
+  );
+  return getMonitor(id)!;
+}
+
+export function getMonitor(id: string): Monitor | undefined {
+  const row = db.prepare("SELECT * FROM monitors WHERE id = ?").get(id) as MonitorRow | undefined;
+  return row ? monitorRowToMonitor(row) : undefined;
+}
+
+export function getActiveMonitors(): Monitor[] {
+  const rows = db.prepare(
+    "SELECT * FROM monitors WHERE status = 'active' ORDER BY created_at DESC",
+  ).all() as MonitorRow[];
+  return rows.map(monitorRowToMonitor);
+}
+
+export function getMonitorByBranch(branch: string): Monitor | undefined {
+  const row = db.prepare(
+    "SELECT * FROM monitors WHERE branch = ? AND status = 'active'",
+  ).get(branch) as MonitorRow | undefined;
+  return row ? monitorRowToMonitor(row) : undefined;
+}
+
+export function updateMonitor(id: string, updates: Partial<Pick<Monitor, "status" | "ciStatus" | "prNumber" | "retryCount" | "lastCheckAt" | "stoppedAt">>): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status !== undefined) {
+    sets.push("status = ?");
+    values.push(updates.status);
+  }
+  if (updates.ciStatus !== undefined) {
+    sets.push("ci_status = ?");
+    values.push(updates.ciStatus);
+  }
+  if (updates.prNumber !== undefined) {
+    sets.push("pr_number = ?");
+    values.push(updates.prNumber);
+  }
+  if (updates.retryCount !== undefined) {
+    sets.push("retry_count = ?");
+    values.push(updates.retryCount);
+  }
+  if (updates.lastCheckAt !== undefined) {
+    sets.push("last_check_at = ?");
+    values.push(updates.lastCheckAt);
+  }
+  if (updates.stoppedAt !== undefined) {
+    sets.push("stopped_at = ?");
+    values.push(updates.stoppedAt);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE monitors SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeMonitor(id: string): boolean {
+  const result = db.prepare("DELETE FROM monitors WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function findMonitorByIdPrefix(prefix: string): Monitor | undefined {
+  const rows = db.prepare("SELECT * FROM monitors WHERE id LIKE ?").all(`${prefix}%`) as MonitorRow[];
+  if (rows.length === 1) return monitorRowToMonitor(rows[0]);
+  return undefined;
+}
+
+// --- Review accessors ---
+
+interface ReviewRow {
+  id: string;
+  branch: string;
+  pr_number: number | null;
+  models: string;
+  delivery_kind: string;
+  delivery_channel_type: string | null;
+  delivery_channel_id: string | null;
+  status: string;
+  summary: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+function reviewRowToReview(row: ReviewRow): ReviewRecord {
+  const delivery: DeliveryTarget =
+    row.delivery_kind === "channel" && row.delivery_channel_type && row.delivery_channel_id
+      ? { kind: "channel", channelType: row.delivery_channel_type, channelId: row.delivery_channel_id }
+      : { kind: "store" };
+
+  let models: string[] = [];
+  try {
+    models = JSON.parse(row.models) as string[];
+  } catch {
+    // Ignore invalid JSON
+  }
+
+  return {
+    id: row.id,
+    branch: row.branch,
+    prNumber: row.pr_number,
+    models,
+    delivery,
+    status: row.status as ReviewRecord["status"],
+    summary: row.summary,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+  };
+}
+
+export function addReview(r: Omit<ReviewRecord, "id" | "completedAt" | "summary" | "createdAt">): ReviewRecord {
+  const id = crypto.randomUUID().slice(0, 8);
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO reviews (id, branch, pr_number, models, delivery_kind, delivery_channel_type, delivery_channel_id, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    r.branch,
+    r.prNumber,
+    JSON.stringify(r.models),
+    r.delivery.kind,
+    r.delivery.kind === "channel" ? r.delivery.channelType : null,
+    r.delivery.kind === "channel" ? r.delivery.channelId : null,
+    r.status,
+    now,
+  );
+  return getReview(id)!;
+}
+
+export function getReview(id: string): ReviewRecord | undefined {
+  const row = db.prepare("SELECT * FROM reviews WHERE id = ?").get(id) as ReviewRow | undefined;
+  return row ? reviewRowToReview(row) : undefined;
+}
+
+export function getAllReviews(): ReviewRecord[] {
+  const rows = db.prepare("SELECT * FROM reviews ORDER BY created_at DESC").all() as ReviewRow[];
+  return rows.map(reviewRowToReview);
+}
+
+export function updateReview(id: string, updates: Partial<Pick<ReviewRecord, "status" | "summary" | "completedAt">>): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status !== undefined) {
+    sets.push("status = ?");
+    values.push(updates.status);
+  }
+  if (updates.summary !== undefined) {
+    sets.push("summary = ?");
+    values.push(updates.summary);
+  }
+  if (updates.completedAt !== undefined) {
+    sets.push("completed_at = ?");
+    values.push(updates.completedAt);
+  }
+
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE reviews SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function removeReview(id: string): boolean {
+  const result = db.prepare("DELETE FROM reviews WHERE id = ?").run(id);
+  return result.changes > 0;
 }

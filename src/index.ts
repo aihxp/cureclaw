@@ -133,7 +133,7 @@ async function startTriggerServer(config: CursorAgentConfig): Promise<{ stop: ()
 }
 
 function printUsage(): void {
-  console.log(`CureClaw v1.1 — General-purpose personal assistant
+  console.log(`CureClaw v1.2 — General-purpose personal assistant
 
 Usage:
   cureclaw [options]              Interactive mode
@@ -222,10 +222,31 @@ Hooks commands:
   /hooks add <event> <command> [args]   Add a hook
   /hooks remove <event> <command>       Remove a hook
 
+Worktree commands:
+  /worktree create <branch> [--base <ref>]   Create isolated worktree
+  /worktree list                              List active worktrees
+  /worktree remove <branch>                   Remove a worktree
+  /worktree cleanup                           Prune stale worktrees
+
+Spawn commands:
+  /spawn <name> <command> [--worktree <branch>]   Start a background process
+  /spawn list                                      List spawned processes
+  /spawn steer <name> "message"                    Write to process stdin
+  /spawn kill <name>                               Kill a running process
+  /spawn log <name> [lines]                        Read process log
+
+Monitor commands:
+  /monitor pr <branch> [--auto-fix] [--max-retries N]   Monitor CI/PR status
+  /monitor list                                          List active monitors
+  /monitor stop <id>                                     Stop a monitor
+
+Review commands:
+  /review <branch> [--models security,architecture,performance] [--post]
+
 Subagent commands:
   /agents               List discovered subagents
   /agent create <name>  Scaffold a new subagent
-  /agent run <name>     Run a subagent interactively
+  /agent run <name> [prompt] [--adaptive] [--worktree <b>] [--evaluator ci|test|shell]
   /agent steer <pfx>    Send follow-up to running subagent
   /agent kill <pfx>     Stop a running subagent
   /agent list --active  Show running subagents
@@ -333,9 +354,17 @@ async function main(): Promise<void> {
     clearSession(path.resolve(config.cwd || process.cwd()));
   }
 
+  // Reconcile spawned processes from previous run
+  const { reconcileProcesses } = await import("./spawn/manager.js");
+  reconcileProcesses();
+
   // Create background runner (shared across all modes)
   const { BackgroundRunner } = await import("./background/runner.js");
   const backgroundRunner = new BackgroundRunner(config);
+
+  // Create CI monitor (shared across all modes)
+  const { CiMonitor } = await import("./monitor/monitor.js");
+  const ciMonitor = new CiMonitor(config);
 
   if (telegram) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -373,11 +402,12 @@ async function main(): Promise<void> {
     const scheduler = new Scheduler({ ...config, cwd: workspace });
     scheduler.start();
     backgroundRunner.start();
+    ciMonitor.start();
 
     const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
 
-    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
-    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); ciMonitor.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); ciMonitor.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
   } else if (whatsapp) {
@@ -416,11 +446,12 @@ async function main(): Promise<void> {
     const scheduler = new Scheduler({ ...config, cwd: workspace });
     scheduler.start();
     backgroundRunner.start();
+    ciMonitor.start();
 
     const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
 
-    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
-    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); ciMonitor.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); ciMonitor.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
   } else if (slack) {
@@ -454,11 +485,12 @@ async function main(): Promise<void> {
     const scheduler = new Scheduler({ ...config, cwd: workspace });
     scheduler.start();
     backgroundRunner.start();
+    ciMonitor.start();
 
     const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
 
-    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
-    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); ciMonitor.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); ciMonitor.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
   } else if (discord) {
@@ -496,11 +528,12 @@ async function main(): Promise<void> {
     const scheduler = new Scheduler({ ...config, cwd: workspace });
     scheduler.start();
     backgroundRunner.start();
+    ciMonitor.start();
 
     const triggerServer = await startTriggerServer({ ...config, cwd: workspace });
 
-    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
-    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGINT", () => { scheduler.stop(); backgroundRunner.stop(); ciMonitor.stop(); triggerServer?.stop(); channel.stop(); });
+    process.once("SIGTERM", () => { scheduler.stop(); backgroundRunner.stop(); ciMonitor.stop(); triggerServer?.stop(); channel.stop(); });
 
     await channel.start();
   } else if (mcpServer) {
@@ -527,12 +560,14 @@ async function main(): Promise<void> {
     const scheduler = new Scheduler(config);
     scheduler.start();
     backgroundRunner.start();
+    ciMonitor.start();
 
     const triggerServer = await startTriggerServer(config);
 
     await startCli(config, backgroundRunner);
     scheduler.stop();
     backgroundRunner.stop();
+    ciMonitor.stop();
     await triggerServer?.stop();
   }
 }

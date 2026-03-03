@@ -19,8 +19,8 @@ afterEach(() => {
 });
 
 describe("toolDefinitions", () => {
-  it("should have 8 tool definitions", () => {
-    assert.equal(toolDefinitions.length, 8);
+  it("should have 12 tool definitions", () => {
+    assert.equal(toolDefinitions.length, 12);
   });
 
   it("should have names starting with cureclaw_", () => {

@@ -1,6 +1,6 @@
 # CureClaw
 
-General-purpose personal assistant powered by Cursor CLI. Wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Five channels for remote access: Telegram, WhatsApp, Slack, and Discord bots plus a CureClaw MCP server (Cursor becomes the dashboard). Agent identity/persona with configurable name, avatar, system prompt, and greeting per channel. Proactive notifications pushed to any channel with delivery logging. Job scheduler with cron/interval/one-shot support. Cloud Agent API with autonomous steering via follow-ups. Enhanced subagent coordination (run, steer, kill, list active). Skills scaffolding, MCP server configuration, hooks management, subagent discovery, custom commands, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution. Agent modes (agent/plan/ask), image attachments, webhook receiver. Fleet execution (parallel cloud agents), goal decomposition (planner → workers), and agent run registry. Long-term memory (SQLite-backed /remember, /recall, /forget). Proactive background agents with suggestion system. Approval gates for tool execution control. Curated MCP server presets with /mcp install. Cross-domain workflow engine with conditions and step chaining.
+General-purpose personal assistant powered by Cursor CLI. Wraps Cursor CLI as a subprocess with a Pi-Mono-style event-driven agent loop. SQLite persistence for session continuity. Five channels for remote access: Telegram, WhatsApp, Slack, and Discord bots plus a CureClaw MCP server (Cursor becomes the dashboard). Agent identity/persona with configurable name, avatar, system prompt, and greeting per channel. Proactive notifications pushed to any channel with delivery logging. Job scheduler with cron/interval/one-shot support. Cloud Agent API with autonomous steering via follow-ups. Enhanced subagent coordination (run, steer, kill, list active). Skills scaffolding, MCP server configuration, hooks management, subagent discovery, custom commands, plugin packaging. Steering queues, reflection loop, and prompt pipelines for multi-step workflows. Multi-workstation support via SSH for remote execution. Agent modes (agent/plan/ask), image attachments, webhook receiver. Fleet execution (parallel cloud agents), goal decomposition (planner → workers), and agent run registry. Long-term memory (SQLite-backed /remember, /recall, /forget). Proactive background agents with suggestion system. Approval gates for tool execution control. Curated MCP server presets with /mcp install. Cross-domain workflow engine with conditions and step chaining. Git worktree isolation for parallel agent work. External process spawning and steering. CI/PR monitoring with auto-fix. Multi-persona code review. Adaptive retry with context-adapted prompts.
 
 ## Quick Context
 
@@ -58,7 +58,19 @@ Single TypeScript process. Spawns `cursor agent --print --output-format stream-j
 | `src/notifications/commands.ts` | /notify send\|log command handlers |
 | `src/mcp-server/index.ts` | MCP server entry point (stdin/stdout JSON-RPC) |
 | `src/mcp-server/protocol.ts` | MCP JSON-RPC types |
-| `src/mcp-server/tools.ts` | 8 MCP tool definitions + handlers |
+| `src/mcp-server/tools.ts` | 12 MCP tool definitions + handlers |
+| `src/worktree/worktree.ts` | Git worktree CRUD (create, remove, cleanup) |
+| `src/worktree/commands.ts` | /worktree create\|list\|remove\|cleanup handlers |
+| `src/spawn/manager.ts` | Process lifecycle (spawn, kill, steer stdin, log) |
+| `src/spawn/commands.ts` | /spawn start\|list\|steer\|kill\|log handlers |
+| `src/monitor/checker.ts` | GitHub interaction via `gh` CLI (pr status, ci checks) |
+| `src/monitor/monitor.ts` | CiMonitor class (2-min background loop, auto-fix) |
+| `src/monitor/commands.ts` | /monitor pr\|list\|stop handlers |
+| `src/review/personas.ts` | 3 reviewer personas (security, architecture, performance) |
+| `src/review/review.ts` | Review engine (parallel agents in ask mode, aggregation) |
+| `src/review/commands.ts` | /review branch handlers |
+| `src/adaptive/evaluators.ts` | Evaluator functions (ci, test, shell, review) |
+| `src/adaptive/retry.ts` | Adaptive retry loop (context-adapted prompt rewriting) |
 | `src/cloud/types.ts` | Cloud Agent API request/response types |
 | `src/cloud/client.ts` | CloudClient class (native fetch, Basic auth) |
 | `src/cloud/commands.ts` | /cloud launch\|steer\|status\|stop\|list\|conversation\|models command handlers |
@@ -109,7 +121,7 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), `wa:<jid>` (Wha
 - **DB location:** `~/.cureclaw/store.db` (override via `CURECLAW_DATA_DIR`)
 - **Session key:** resolved cwd for CLI, `tg:<chatId>` for Telegram, `wa:<jid>` for WhatsApp
 - **Runtime deps:** `better-sqlite3`, `grammy`, `@whiskeysockets/baileys`, `pino`, `qrcode-terminal`, `@slack/bolt`, `discord.js`
-- Tables: `sessions` (key → chatId), `history` (prompt/result/tokens), `config` (key/value), `jobs` (scheduler), `triggers`, `workstations`, `agent_runs`, `fleets`, `memory`, `background_agents`, `suggestions`, `approval_gates`, `workflows`, `identities`, `notification_log`
+- Tables: `sessions` (key → chatId), `history` (prompt/result/tokens), `config` (key/value), `jobs` (scheduler), `triggers`, `workstations`, `agent_runs`, `fleets`, `memory`, `background_agents`, `suggestions`, `approval_gates`, `workflows`, `identities`, `notification_log`, `git_worktrees`, `spawned_processes`, `monitors`, `reviews`
 
 ## Channels
 
@@ -364,11 +376,57 @@ Sessions keyed by `resolvedCwd` (CLI), `tg:<chatId>` (Telegram), `wa:<jid>` (Wha
 
 - Run, steer, list, and kill subagents interactively
 - `/agent run <name> [prompt]` — discovers subagent .md file, creates Agent, runs in background
+- `/agent run` supports `--worktree <branch>` (set cwd to worktree), `--adaptive` (retry on failure), `--max-retries N`, `--evaluator ci|test|shell`, `--eval-cmd "cmd"`
 - `/agent steer <prefix> "follow-up"` — sends follow-up to running subagent
 - `/agent kill <prefix>` — aborts running subagent
 - `/agent list --active` — shows running subagents with status
 - Tracked in agent_runs with kind `"subagent"` via fleet registry
 - Live subagents tracked in module-level Map for prefix-based lookup
+
+### Git Worktree Isolation
+
+- Create isolated git worktrees for parallel agent work on separate branches
+- Commands: `/worktree create <branch> [--base <ref>]`, `/worktree list`, `/worktree remove <branch>`, `/worktree cleanup`
+- Worktree path: `../<repoName>-<branch>` (sibling directory of current repo)
+- Auto-detects package manager (pnpm/yarn/npm) and runs install
+- DB table: `git_worktrees` (id, branch, path, base_branch, task_id, status, created_at, removed_at)
+- Cleanup prunes stale worktrees (path no longer exists on disk)
+
+### External Process Spawning
+
+- Spawn and manage external processes (Codex, Claude Code, any CLI)
+- Commands: `/spawn <name> <command> [--worktree <branch>]`, `/spawn list`, `/spawn steer <name> "msg"`, `/spawn kill <name>`, `/spawn log <name> [lines]`
+- stdout + stderr piped to `~/.cureclaw/logs/<name>.log`
+- Steer via stdin, read logs, kill with SIGTERM
+- DB table: `spawned_processes` (id, name, command, pid, log_file, worktree_id, cwd, status, exit_code)
+- Process reconciliation on startup: marks orphaned "running" records as "exited"
+
+### CI/PR Monitoring
+
+- Background loop monitors CI/PR status via `gh` CLI (2-minute interval)
+- Commands: `/monitor pr <branch> [--auto-fix] [--max-retries N]`, `/monitor list`, `/monitor stop <id-prefix>`
+- On CI failure + auto-fix: spawns agent with failure context, increments retry count
+- On status change: delivers notification to configured channel
+- Auto-completes when CI transitions from failing to passing
+- DB table: `monitors` (id, branch, pr_number, ci_status, auto_fix, max_retries, retry_count, delivery, status)
+
+### Multi-Persona Code Review
+
+- Run parallel code reviews with different reviewer personas
+- Commands: `/review <branch> [--models security,architecture,performance] [--post]`
+- 3 built-in personas: security (input validation, edge cases), architecture (design patterns), performance (complexity, allocations)
+- Each persona runs as an Agent in ask mode with system prompt injection
+- `--post` posts aggregated review as GitHub PR comment
+- DB table: `reviews` (id, branch, pr_number, models, delivery, status, summary)
+
+### Adaptive Retry
+
+- Retry agent execution with context-adapted prompts on failure
+- Enabled via `--adaptive` flag on `/agent run`
+- Evaluators: `ci` (check CI via gh), `test` (run npm test), `shell` (arbitrary command), `review`
+- On failure: evaluator gathers error context, builds adapted prompt with failure details
+- Loop continues until evaluator passes or max retries reached
+- Run kind: `adaptive` in agent_runs
 
 ### Steering Queues
 
@@ -441,4 +499,6 @@ npm run dev -- --whatsapp                         # WhatsApp mode (QR auth)
 
 **v1.0 — General-Purpose Personal Assistant:** Long-term memory (SQLite-backed /remember, /recall, /forget + memory context provider). Proactive background agents (periodic subagent execution + suggestion system). Approval gates (pattern-based allow/deny/ask rules for tool execution). Curated MCP presets (/mcp install for 10 community servers). Cross-domain workflows (multi-step engine with prompt/cloud/shell/condition steps, interpolation, conditions).
 
-**v1.1 — Full-Blown AI Assistant (current):** Slack channel (@slack/bolt, socket mode + HTTP). Discord channel (discord.js, gateway + intents). CureClaw MCP server (8 tools, stdin/stdout JSON-RPC, self-registration). Agent identity/persona (configurable name, avatar, system prompt, greeting per channel). Proactive notifications (push to any channel, notification log). Enhanced subagent coordination (/agent run, steer, kill, list --active).
+**v1.1 — Full-Blown AI Assistant:** Slack channel (@slack/bolt, socket mode + HTTP). Discord channel (discord.js, gateway + intents). CureClaw MCP server (8 tools, stdin/stdout JSON-RPC, self-registration). Agent identity/persona (configurable name, avatar, system prompt, greeting per channel). Proactive notifications (push to any channel, notification log). Enhanced subagent coordination (/agent run, steer, kill, list --active).
+
+**v1.2 — Agent Swarm (current):** Git worktree isolation (agents work in parallel on isolated branches). External process spawning and steering (Codex, Claude Code, any CLI). CI/PR monitoring with auto-fix (2-min background loop via `gh` CLI). Multi-persona code review (security, architecture, performance — parallel agents in ask mode). Adaptive retry with context-adapted prompts (evaluators: ci, test, shell). 12 MCP tools. Tables: git_worktrees, spawned_processes, monitors, reviews.

@@ -21,6 +21,10 @@ import { handleBackgroundCommand } from "./background/commands.js";
 import { handleWorkflowCommand } from "./workflow/commands.js";
 import { handleIdentityCommand } from "./identity/commands.js";
 import { handleNotifyCommand } from "./notifications/commands.js";
+import { handleWorktreeCommand } from "./worktree/commands.js";
+import { handleSpawnCommand } from "./spawn/commands.js";
+import { handleMonitorCommand } from "./monitor/commands.js";
+import { handleReviewCommand } from "./review/commands.js";
 import type { BackgroundRunner } from "./background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "./types.js";
 
@@ -298,7 +302,55 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
     return;
   }
 
-  // 4d. Agent commands (sync or async)
+  // 4d. Worktree commands
+  const worktreeResult = handleWorktreeCommand(cmd);
+  if (worktreeResult) {
+    if (worktreeResult instanceof Promise || (worktreeResult && "then" in worktreeResult)) {
+      const resolved = await worktreeResult;
+      console.log(resolved.text);
+    } else {
+      console.log((worktreeResult as { text: string }).text);
+    }
+    return;
+  }
+
+  // 4e. Spawn commands
+  const spawnResult = handleSpawnCommand(cmd);
+  if (spawnResult) {
+    if (spawnResult instanceof Promise || (spawnResult && "then" in spawnResult)) {
+      const resolved = await spawnResult;
+      console.log(resolved.text);
+    } else {
+      console.log((spawnResult as { text: string }).text);
+    }
+    return;
+  }
+
+  // 4f. Monitor commands
+  const monitorResult = handleMonitorCommand(cmd, ctx, config);
+  if (monitorResult) {
+    if (monitorResult instanceof Promise || (monitorResult && "then" in monitorResult)) {
+      const resolved = await monitorResult;
+      console.log(resolved.text);
+    } else {
+      console.log((monitorResult as { text: string }).text);
+    }
+    return;
+  }
+
+  // 4g. Review commands
+  const reviewResult = handleReviewCommand(cmd, ctx, config);
+  if (reviewResult) {
+    if (reviewResult instanceof Promise || (reviewResult && "then" in reviewResult)) {
+      const resolved = await reviewResult;
+      console.log(resolved.text);
+    } else {
+      console.log((reviewResult as { text: string }).text);
+    }
+    return;
+  }
+
+  // 4h. Agent commands (sync or async)
   const agentResult = handleAgentCommand(cmd, workspace, backgroundRunner, config);
   if (agentResult) {
     if (agentResult instanceof Promise || (agentResult && "then" in agentResult)) {
@@ -424,9 +476,13 @@ async function handleCommand(cmd: string, agent: Agent, cwd: string, workspace: 
       console.log("  /hooks         Hook commands (list, add, remove)");
       console.log("  /identity      Identity commands (set, show, list, remove)");
       console.log("  /notify        Send notifications: /notify <channel:id> \"message\"");
+      console.log("  /worktree      Worktree commands (create, list, remove, cleanup)");
+      console.log("  /spawn         Spawn commands (start, list, steer, kill, log)");
+      console.log("  /monitor       CI/PR monitor commands (pr, list, stop)");
+      console.log("  /review        Code review: /review <branch> [--models ...] [--post]");
       console.log("  /agents        List discovered subagents");
       console.log("  /agent create  Create a subagent: /agent create <name> [--readonly] [--model <m>]");
-      console.log("  /agent run     Run a subagent: /agent run <name> [prompt]");
+      console.log("  /agent run     Run a subagent: /agent run <name> [prompt] [--adaptive] [--worktree <b>]");
       console.log("  /agent steer   Send follow-up: /agent steer <prefix> \"message\"");
       console.log("  /agent kill    Stop a subagent: /agent kill <prefix>");
       console.log("  /commands      List discovered custom commands");

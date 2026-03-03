@@ -17,6 +17,10 @@ import { handleBackgroundCommand } from "../background/commands.js";
 import { handleWorkflowCommand } from "../workflow/commands.js";
 import { handleIdentityCommand } from "../identity/commands.js";
 import { handleNotifyCommand } from "../notifications/commands.js";
+import { handleWorktreeCommand } from "../worktree/commands.js";
+import { handleSpawnCommand } from "../spawn/commands.js";
+import { handleMonitorCommand } from "../monitor/commands.js";
+import { handleReviewCommand } from "../review/commands.js";
 import { getGreeting } from "../identity/identity.js";
 import type { BackgroundRunner } from "../background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
@@ -217,6 +221,8 @@ export class SlackChannel implements Channel {
       () => handleAgentCommand(input, this.config.workspace, this.config.backgroundRunner, this.config.cursorConfig) as { text: string } | null,
       () => handleCommandsCommand(input, this.config.workspace),
       () => handleWorkstationCommand(input),
+      () => handleWorktreeCommand(input) as { text: string } | null,
+      () => handleSpawnCommand(input) as { text: string } | null,
     ];
 
     for (const handler of syncHandlers) {
@@ -239,6 +245,8 @@ export class SlackChannel implements Channel {
       () => handleCloudCommand(input, ctx),
       () => handleFleetCommand(input, ctx, this.config.cursorConfig),
       () => handleWorkflowCommand(input, ctx, this.config.cursorConfig),
+      () => handleMonitorCommand(input, ctx, this.config.cursorConfig),
+      () => handleReviewCommand(input, ctx, this.config.cursorConfig),
     ];
 
     for (const handler of asyncHandlers) {

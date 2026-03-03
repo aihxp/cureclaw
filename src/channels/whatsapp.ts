@@ -27,6 +27,10 @@ import { handleBackgroundCommand } from "../background/commands.js";
 import { handleWorkflowCommand } from "../workflow/commands.js";
 import { handleIdentityCommand } from "../identity/commands.js";
 import { handleNotifyCommand } from "../notifications/commands.js";
+import { handleWorktreeCommand } from "../worktree/commands.js";
+import { handleSpawnCommand } from "../spawn/commands.js";
+import { handleMonitorCommand } from "../monitor/commands.js";
+import { handleReviewCommand } from "../review/commands.js";
 import { getGreeting } from "../identity/identity.js";
 import type { BackgroundRunner } from "../background/runner.js";
 import type { AgentEvent, CursorAgentConfig } from "../types.js";
@@ -285,6 +289,34 @@ export class WhatsAppChannel implements Channel {
       if (notifyResultOrPromise) {
         const notifyResult = notifyResultOrPromise instanceof Promise ? await notifyResultOrPromise : notifyResultOrPromise;
         await this.sendMessage(jid, (notifyResult as { text: string }).text);
+        return;
+      }
+
+      const worktreeResultOrPromise = handleWorktreeCommand(text);
+      if (worktreeResultOrPromise) {
+        const worktreeResult = worktreeResultOrPromise instanceof Promise ? await worktreeResultOrPromise : worktreeResultOrPromise;
+        await this.sendMessage(jid, (worktreeResult as { text: string }).text);
+        return;
+      }
+
+      const spawnResultOrPromise = handleSpawnCommand(text);
+      if (spawnResultOrPromise) {
+        const spawnResult = spawnResultOrPromise instanceof Promise ? await spawnResultOrPromise : spawnResultOrPromise;
+        await this.sendMessage(jid, (spawnResult as { text: string }).text);
+        return;
+      }
+
+      const monitorResultOrPromise = handleMonitorCommand(text, waCtx, this.config.cursorConfig);
+      if (monitorResultOrPromise) {
+        const monitorResult = monitorResultOrPromise instanceof Promise ? await monitorResultOrPromise : monitorResultOrPromise;
+        await this.sendMessage(jid, (monitorResult as { text: string }).text);
+        return;
+      }
+
+      const reviewResultOrPromise = handleReviewCommand(text, waCtx, this.config.cursorConfig);
+      if (reviewResultOrPromise) {
+        const reviewResult = reviewResultOrPromise instanceof Promise ? await reviewResultOrPromise : reviewResultOrPromise;
+        await this.sendMessage(jid, (reviewResult as { text: string }).text);
         return;
       }
 

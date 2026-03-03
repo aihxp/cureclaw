@@ -152,10 +152,46 @@ async function runAgent(
   workspace: string,
   cursorConfig?: CursorAgentConfig,
 ): Promise<CommandResult> {
+  // Extract flags before parsing name/prompt
+  let worktreeBranch: string | undefined;
+  let adaptive = false;
+  let maxRetries = 3;
+  let evaluator: "ci" | "test" | "shell" | "review" = "test";
+  let evalCmd: string | undefined;
+
+  const wtMatch = args.match(/--worktree\s+(\S+)/);
+  if (wtMatch) {
+    worktreeBranch = wtMatch[1];
+    args = args.replace(wtMatch[0], "").trim();
+  }
+
+  if (args.includes("--adaptive")) {
+    adaptive = true;
+    args = args.replace(/--adaptive/, "").trim();
+  }
+
+  const retriesMatch = args.match(/--max-retries\s+(\d+)/);
+  if (retriesMatch) {
+    maxRetries = parseInt(retriesMatch[1], 10);
+    args = args.replace(retriesMatch[0], "").trim();
+  }
+
+  const evalMatch = args.match(/--evaluator\s+(\S+)/);
+  if (evalMatch) {
+    evaluator = evalMatch[1] as typeof evaluator;
+    args = args.replace(evalMatch[0], "").trim();
+  }
+
+  const evalCmdMatch = args.match(/--eval-cmd\s+"((?:[^"\\]|\\.)*)"/);
+  if (evalCmdMatch) {
+    evalCmd = evalCmdMatch[1];
+    args = args.replace(evalCmdMatch[0], "").trim();
+  }
+
   // Parse: <name> [prompt]
   const parts = args.match(/^(\S+)(?:\s+(.+))?$/s);
   if (!parts) {
-    return { text: "Usage: /agent run <name> [prompt]" };
+    return { text: "Usage: /agent run <name> [prompt] [--worktree <branch>] [--adaptive] [--max-retries N] [--evaluator ci|test|shell] [--eval-cmd \"cmd\"]" };
   }
 
   const name = parts[1];
@@ -195,6 +231,38 @@ async function runAgent(
       ...cursorConfig,
       mode: agentInfo.readonly ? "ask" : cursorConfig.mode,
     };
+
+    // Apply worktree cwd if specified
+    if (worktreeBranch) {
+      const { getWorktreeCwd } = await import("../worktree/worktree.js");
+      const wtCwd = getWorktreeCwd(worktreeBranch);
+      if (!wtCwd) {
+        return { text: `Worktree "${worktreeBranch}" not found or not active.` };
+      }
+      agentConfig.cwd = wtCwd;
+    }
+
+    // Adaptive retry path
+    if (adaptive) {
+      const { adaptiveRetry } = await import("../adaptive/retry.js");
+      const result = await adaptiveRetry({
+        prompt,
+        config: agentConfig,
+        adaptiveConfig: {
+          maxRetries,
+          evaluator,
+          evaluatorArg: evalCmd ?? worktreeBranch,
+        },
+        sessionKey,
+        branch: worktreeBranch,
+      });
+
+      return {
+        text: result.success
+          ? `Adaptive run succeeded after ${result.attempts} attempt(s).`
+          : `Adaptive run failed after ${result.attempts} attempt(s). Last result:\n${result.result.slice(0, 500)}`,
+      };
+    }
 
     const agent = new Agent(agentConfig, {
       useDb: true,
@@ -309,10 +377,17 @@ function agentHelp(): string {
     "Agent commands:",
     "",
     '  /agent create <name> [--model <m>] [--readonly] [--description "..."]',
-    "  /agent run <name> [prompt]       Run a subagent (background)",
-    '  /agent steer <prefix> "message"  Send follow-up to running subagent',
-    "  /agent kill <prefix>             Stop a running subagent",
-    "  /agent list --active             Show running subagents",
-    "  /agents                          List discovered subagents",
+    "  /agent run <name> [prompt] [flags]  Run a subagent (background)",
+    '  /agent steer <prefix> "message"     Send follow-up to running subagent',
+    "  /agent kill <prefix>                Stop a running subagent",
+    "  /agent list --active                Show running subagents",
+    "  /agents                             List discovered subagents",
+    "",
+    "  Run flags:",
+    "    --worktree <branch>              Set agent cwd to worktree path",
+    "    --adaptive                       Enable adaptive retry loop",
+    "    --max-retries N                  Max retry attempts (default 3)",
+    "    --evaluator ci|test|shell        Evaluator type (default test)",
+    '    --eval-cmd "command"             Custom evaluator command',
   ].join("\n");
 }
